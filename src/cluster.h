@@ -117,7 +117,7 @@ typedef struct clusterNode {
     char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size */
     int flags;      /* CLUSTER_NODE_... */
     uint64_t configEpoch; /* Last configEpoch observed for this node */
-    unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node */
+    unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node 此节点处理的需要处理的槽*/
     uint16_t *slot_info_pairs; /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count; /* Used number of slots in slot_info_pairs */
     int slot_info_pairs_alloc; /* Allocated number of slots in slot_info_pairs */
@@ -213,20 +213,25 @@ typedef struct clusterState {
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
  * address for all the next messages. */
+
+/*
+最初我们不知道自己的“名称”，但一旦我们连接到第一个节点，就可以使用getsockname()函数找到它。
+然后我们将在接下来的所有消息中使用此地址。
+*/
 typedef struct {
-    char nodename[CLUSTER_NAMELEN];
-    uint32_t ping_sent;
-    uint32_t pong_received;
+    char nodename[CLUSTER_NAMELEN]; // 需要发送的节点的id
+    uint32_t ping_sent; // 最后一次向该节点发送的ping消息时间
+    uint32_t pong_received; // 最后一次接收该节点的pong消息时间
     char ip[NET_IP_STR_LEN];  /* IP address last time it was seen */
     uint16_t port;              /* base port last time it was seen */
     uint16_t cport;             /* cluster port last time it was seen */
-    uint16_t flags;             /* node->flags copy */
+    uint16_t flags;             /* node->flags copy 该节点的标识是node->flags的拷贝*/
     uint16_t pport;             /* plaintext-port, when base port is TLS */
     uint16_t notused1;
 } clusterMsgDataGossip;
 
 typedef struct {
-    char nodename[CLUSTER_NAMELEN];
+    char nodename[CLUSTER_NAMELEN]; // 需要发送的节点的id
 } clusterMsgDataFail;
 
 typedef struct {
@@ -272,14 +277,15 @@ typedef struct {
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
 
+// cluster消息的消息体
 union clusterMsgData {
     /* PING, MEET and PONG */
     struct {
-        /* Array of N clusterMsgDataGossip structures */
-        clusterMsgDataGossip gossip[1];
-        /* Extension data that can optionally be sent for ping/meet/pong
-         * messages. We can't explicitly define them here though, since
-         * the gossip array isn't the real length of the gossip data. */
+        // N个clusterMsgDataGossip结构的数组
+        /*可以选择发送ping/meet/pong消息的扩展数据。
+        不过，我们不能在这里明确定义它们，因为gossip数组不是gossip数据的实际长度*/
+        // 拥有多个用作信息交换
+        clusterMsgDataGossip gossip[1];        
     } ping;
 
     /* FAIL */
@@ -303,8 +309,11 @@ union clusterMsgData {
     } module;
 };
 
-#define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
+#define CLUSTER_PROTO_VER 1 /* 集群之间通信的写版本 */
 
+/*
+消息头，包含了发送节点关键信息节点id、槽映射、节点标识(主从角色、是否下线)等
+*/
 typedef struct {
     char sig[4];        /* Signature "RCmb" (Redis Cluster message bus). */
     uint32_t totlen;    /* Total length of this message */
@@ -319,17 +328,17 @@ typedef struct {
     uint64_t offset;    /* Master replication offset if node is a master or
                            processed replication offset if node is a slave. */
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
-    unsigned char myslots[CLUSTER_SLOTS/8];
-    char slaveof[CLUSTER_NAMELEN];
+    unsigned char myslots[CLUSTER_SLOTS/8]; /*发送节点负责的槽信息*/
+    char slaveof[CLUSTER_NAMELEN]; /*如果发送节点是从节点，记录对应主节点的node_id*/
     char myip[NET_IP_STR_LEN];    /* Sender IP, if not all zeroed. */
     uint16_t extensions; /* Number of extensions sent along with this packet. */
     char notused1[30];   /* 30 bytes reserved for future usage. */
     uint16_t pport;      /* Sender TCP plaintext port, if base port is TLS */
     uint16_t cport;      /* Sender TCP cluster bus port */
-    uint16_t flags;      /* Sender node flags */
-    unsigned char state; /* Cluster state from the POV of the sender */
-    unsigned char mflags[3]; /* Message flags: CLUSTERMSG_FLAG[012]_... */
-    union clusterMsgData data;
+    uint16_t flags;      /* Sender node flags 节点标识 区分主从角色、是否下线等等*/ 
+    unsigned char state; /* Cluster state from the POV of the sender 发送节点集群所处的状态*/
+    unsigned char mflags[3]; /* Message flags: CLUSTERMSG_FLAG[012]_... 消息标识*/
+    union clusterMsgData data; // 消息正文
 } clusterMsg;
 
 /* clusterMsg defines the gossip wire protocol exchanged among Redis cluster

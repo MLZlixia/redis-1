@@ -554,6 +554,10 @@ void sentinelIsRunning(void) {
  *  ENOENT: Can't resolve the hostname, unless accept_unresolved is non-zero.
  *  EINVAL: Invalid port number.
  */
+
+/*
+根据给定的地址创建一个sentinel实例
+*/
 sentinelAddr *createSentinelAddr(char *hostname, int port, int is_accept_unresolved) {
     char ip[NET_IP_STR_LEN];
     sentinelAddr *sa;
@@ -562,6 +566,9 @@ sentinelAddr *createSentinelAddr(char *hostname, int port, int is_accept_unresol
         errno = EINVAL;
         return NULL;
     }
+    // 解析给定的ip地址
+    // ipv4或则ipv6
+    // 如果不能解析返回错误
     if (anetResolve(NULL,hostname,ip,sizeof(ip),
                     sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) == ANET_ERR) {
         serverLog(LL_WARNING, "Failed to resolve hostname '%s'", hostname);
@@ -630,6 +637,8 @@ const char *announceSentinelAddr(const sentinelAddr *a) {
 /* Return an allocated sds with hostname/address:port. IPv6
  * addresses are bracketed the same way anetFormatAddr() does.
  */
+
+// 返回hostname/address:port格式
 sds announceSentinelAddrAndPort(const sentinelAddr *a) {
     const char *addr = announceSentinelAddr(a);
     if (strchr(addr, ':') != NULL)
@@ -923,7 +932,7 @@ void sentinelCollectTerminatedScripts(void) {
     }
 }
 
-/* Kill scripts in timeout, they'll be collected by the
+/* Kill
  * sentinelCollectTerminatedScripts() function. */
 void sentinelKillTimedoutScripts(void) {
     listNode *ln;
@@ -1102,20 +1111,33 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelRedisInstance *ri)
  * Return C_OK if a matching Sentinel was found in the context of a
  * different master and sharing was performed. Otherwise C_ERR
  * is returned. */
+
+/*
+此函数将尝试在不同主机的上下文中共享我们已经为同一哨兵提供的实例链接，并将实例作为参数传递。
+
+这样，多个Sentinel对象引用相同的物理Sentinel实例，
+但在不同主机的上下文中，它们将使用单个连接，每秒发送一个PING以进行故障检测，等等。
+
+*/
+
 int sentinelTryConnectionSharing(sentinelRedisInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
     dictIterator *di;
     dictEntry *de;
 
     if (ri->runid == NULL) return C_ERR; /* No way to identify it. */
-    if (ri->link->refcount > 1) return C_ERR; /* Already shared. */
+    if (ri->link->refcount > 1) return C_ERR; /* Already shared. */ /*引用次数大于1已经被分享*/
 
     di = dictGetIterator(sentinel.masters);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *master = dictGetVal(de), *match;
         /* We want to share with the same physical Sentinel referenced
          * in other masters, so skip our master. */
+        /*
+        想与其他master共享sentinel的物理连接，跳过我们自己的master。
+        */
         if (master == ri->master) continue;
+        // 从监控master的sentinels中查看是否有此节点
         match = getSentinelRedisInstanceByAddrAndRunID(master->sentinels,
                                                        NULL,0,ri->runid);
         if (match == NULL) continue; /* No match. */
@@ -1123,6 +1145,10 @@ int sentinelTryConnectionSharing(sentinelRedisInstance *ri) {
 
         /* We identified a matching Sentinel, great! Let's free our link
          * and use the one of the matching Sentinel. */
+
+        /*
+        我们找到了一个匹配的sentinel，然后释放我们的链接，共享match的sentinel。
+        */
         releaseInstanceLink(ri->link,NULL);
         ri->link = match->link;
         match->link->refcount++;
@@ -1189,6 +1215,8 @@ int sentinelDropConnections(void) {
  * will be updated.
  *
  * Return the number of updated Sentinel addresses. */
+
+// 在监控的所有masters中更改监控的sentinel的addr
 int sentinelUpdateSentinelAddressInAllMasters(sentinelRedisInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
     dictIterator *di;
@@ -1280,21 +1308,43 @@ void sentinelDisconnectCallback(const redisAsyncContext *c, int status) {
  * a master with the same name, a slave with the same address, or a sentinel
  * with the same ID already exists. */
 
+
+/*
+创建redis实例时，如果需要，调用方必须填充以下字段：
+*runid：设置为NULL，但在收到信息输出后将填充。
+*info_refresh:设置为0表示我们迄今为止从未收到信息。
+*
+*如果SRI_MASTER设置为初始标志，则实例将添加到sentinel.masters表中。
+*
+*如果设置了SRI_SLAVE或SRI_SENTINEL，那么“master”必须不为NULL，并且实例被添加到master->SLAVE或master->SENTINEL表中。
+*
+*如果实例是从实例，则忽略name参数，并自动创建为ip/hostname:port。
+*
+*如果无法解析主机名或端口超出范围，该函数将失败。
+*发生这种情况时，将返回NULL，并相应地为createSentinelAddr（）函数设置errno。
+*
+*如果已经存在具有相同名称的主机、具有相同地址的从机或具有相同ID的哨兵，则该函数也可能会失败并返回NULL，并将errno设置为EBUSY。
+*/
+
 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
     sentinelRedisInstance *ri;
     sentinelAddr *addr;
     dict *table = NULL;
     sds sdsname;
 
+    // 只能是master、slave、sentinel中的一种
     serverAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL));
+    // 如果master不为空，必须是master
     serverAssert((flags & SRI_MASTER) || master != NULL);
 
     /* Check address validity. */
+    // 检测地址的合法性
     addr = createSentinelAddr(hostname,port,1);
     if (addr == NULL) return NULL;
 
     /* For slaves use ip/host:port as name. */
     if (flags & SRI_SLAVE)
+       // 如果是slave需要转换为ip/port格式
         sdsname = announceSentinelAddrAndPort(addr);
     else
         sdsname = sdsnew(name);
@@ -1303,6 +1353,8 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
      * name for a master is used multiple times inside the configuration or
      * if we try to add multiple times a slave or sentinel with same ip/port
      * to a master. */
+
+    // 如果地址已经存在，不在创建，直接返回
     if (flags & SRI_MASTER) table = sentinel.masters;
     else if (flags & SRI_SLAVE) table = master->slaves;
     else if (flags & SRI_SENTINEL) table = master->sentinels;
@@ -1418,11 +1470,13 @@ sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
      * If that is the case, depending on configuration we either resolve
      * it and use the IP address or fail.
      */
+
     addr = createSentinelAddr(slave_addr, port, 0);
     if (!addr) return NULL;
     key = announceSentinelAddrAndPort(addr);
     releaseSentinelAddr(addr);
 
+    // 在sentinel的salves中查找对应的ip地址的slave
     slave = dictFetchValue(ri->slaves,key);
     sdsfree(key);
     return slave;
@@ -1447,6 +1501,7 @@ const char *sentinelRedisInstanceTypeStr(sentinelRedisInstance *ri) {
  *
  * The function returns 1 if the matching Sentinel was removed, otherwise
  * 0 if there was no Sentinel with this ID. */
+// master的关联中移除对应的runid的sentinel节点
 int removeMatchingSentinelFromMaster(sentinelRedisInstance *master, char *runid) {
     dictIterator *di;
     dictEntry *de;
@@ -1600,6 +1655,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
     newaddr = createSentinelAddr(hostname,port,0);
     if (newaddr == NULL) return C_ERR;
 
+    // 获取slaves列表
     /* There can be only 0 or 1 slave that has the newaddr.
      * and It can add old master 1 more slave. 
      * so It allocates dictSize(master->slaves) + 1          */
@@ -1623,6 +1679,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
     }
 
     /* Reset and switch address. */
+    // 更新master的
     sentinelResetMaster(master,SENTINEL_RESET_NO_SENTINELS);
     oldaddr = master->addr;
     master->addr = newaddr;
@@ -1636,6 +1693,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
         slave = createSentinelRedisInstance(NULL,SRI_SLAVE,slaves[j]->hostname,
                     slaves[j]->port, master->quorum, master);
         releaseSentinelAddr(slaves[j]);
+        // salve向slave频道发送envent，并记录日志
         if (slave) sentinelEvent(LL_NOTICE,"+slave",slave,"%@");
     }
     zfree(slaves);
@@ -1643,12 +1701,16 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
     /* Release the old address at the end so we are safe even if the function
      * gets the master->addr->ip and master->addr->port as arguments. */
     releaseSentinelAddr(oldaddr);
+    // 刷新配置的日志
     sentinelFlushConfig();
     return C_OK;
 }
 
 /* Return non-zero if there was no SDOWN or ODOWN error associated to this
  * instance in the latest 'ms' milliseconds. */
+
+// 此节点被sentine判定的下线时间 > 给定的ms时间
+// 或者此节点没有下线
 int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
     mstime_t most_recent;
 
@@ -1660,12 +1722,17 @@ int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
 
 /* Return the current master address, that is, its address or the address
  * of the promoted slave if already operational. */
+// 发现当前的master地址，本身的master地址或者slaver升级成的master地址。
 sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
     /* If we are failing over the master, and the state is already
      * SENTINEL_FAILOVER_STATE_RECONF_SLAVES or greater, it means that we
      * already have the new configuration epoch in the master, and the
      * slave acknowledged the configuration switch. Advertise the new
      * address. */
+
+    // 如果正在对住备进行故障转换，并且状态已经是SENTINEL_FAILOVER_STATE_RECONF_SLAVES或者更高，意味着从设备已经升级为master，并且配置了新的
+    // 配置纪元，此时从设备地址为主地址。
+
     if ((master->flags & SRI_FAILOVER_IN_PROGRESS) &&
         master->promoted_slave &&
         master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES)
@@ -1701,6 +1768,9 @@ void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
  * we check the one of the master), and map the command that we should send
  * to the set of renamed commands. However, if the command was not renamed,
  * we just return "command" itself. */
+/*
+一些命令在sentinel这里发生改变，使用此方法获取真正的命令
+*/
 char *sentinelInstanceMapCommand(sentinelRedisInstance *ri, char *command) {
     sds sc = sdsnew(command);
     if (ri->master) ri = ri->master;
@@ -2055,13 +2125,16 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
                              sentinel.announce_hostnames != SENTINEL_DEFAULT_ANNOUNCE_HOSTNAMES);
 
     /* For every master emit a "sentinel monitor" config entry. */
+    // 一直循环运行，监控sentinel monitor
     di = dictGetIterator(sentinel.masters);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *master, *ri;
         sentinelAddr *master_addr;
 
         /* sentinel monitor */
+        // 在配置文件写入 sentinel monitor mymaster ip port quorum 命令
         master = dictGetVal(de);
+        // 哨兵模式获取当前的master地址
         master_addr = sentinelGetCurrentMasterAddress(master);
         line = sdscatprintf(sdsempty(),"sentinel monitor %s %s %d %d",
             master->name, announceSentinelAddr(master_addr), master_addr->port,
@@ -2070,6 +2143,11 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* rewriteConfigMarkAsProcessed is handled after the loop */
 
         /* sentinel down-after-milliseconds */
+        // sentinel down-after-milliseconds <times>ms
+        // sentine节点定期发送ping命令来判断redis节点和其余sentinel是否可达。
+        // 超过此配置时间没有回复则认为节点不可达
+        // 此配置的值越大=>sentinel判断不可达越宽松，反之越严格。并且意味着应用方需要等待故障转移的时间越长
+        // 条件太严格可能存在一定的误判率。
         if (master->down_after_period != sentinel_default_down_after) {
             line = sdscatprintf(sdsempty(),
                 "sentinel down-after-milliseconds %s %ld",
@@ -2079,6 +2157,11 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         }
 
         /* sentinel failover-timeout */
+        // 故障转移时间 实际应用在各个阶段
+        // 选出合适从节点
+        // 晋升选出的的从节点为主节点
+        // 命令其余从节点复制新的主节点
+        // 等待旧的主节点恢复后命令它去复制新的主节点
         if (master->failover_timeout != sentinel_default_failover_timeout) {
             line = sdscatprintf(sdsempty(),
                 "sentinel failover-timeout %s %ld",
@@ -2089,6 +2172,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         }
 
         /* sentinel parallel-syncs */
+        // 用来限制一次故障转移之后，每次向新的主节点发起复制的操作的个数
+        // 多个的话会造成io开销
+        // 为1时会轮询发起开销
         if (master->parallel_syncs != SENTINEL_DEFAULT_PARALLEL_SYNCS) {
             line = sdscatprintf(sdsempty(),
                 "sentinel parallel-syncs %s %d",
@@ -2157,12 +2243,16 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         /* rewriteConfigMarkAsProcessed is handled after the loop */
 
         /* sentinel known-slave */
+        // 写入sentinel模式的配置文件
+        // 用于发现master的slaves
         di2 = dictGetIterator(master->slaves);
         while((de = dictNext(di2)) != NULL) {
             sentinelAddr *slave_addr;
 
             ri = dictGetVal(de);
             slave_addr = ri->addr;
+
+            // 主地址和从相同，说明故障转移正在进行，并且从已经成功升级为主。
 
             /* If master_addr (obtained using sentinelGetCurrentMasterAddress()
              * so it may be the address of the promoted slave) is equal to this
@@ -2180,6 +2270,8 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
         dictReleaseIterator(di2);
 
         /* sentinel known-sentinel */
+         // 写入sentinel模式的配置文件
+         //  用于发现其他的sentinel节点
         di2 = dictGetIterator(master->sentinels);
         while((de = dictNext(di2)) != NULL) {
             ri = dictGetVal(de);
@@ -2396,6 +2488,9 @@ static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
 /* Create the async connections for the instance link if the link
  * is disconnected. Note that link->disconnected is true even if just
  * one of the two links (commands and pub/sub) is missing. */
+
+// 如果节点失去连接，此函数会创建一个异步连接。
+// 如果link->disconnected被标记为true，意味着失去了两个连接(执行命令连接、订阅管道的连接)
 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
     if (ri->link->disconnected == 0) return;
@@ -2407,6 +2502,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
     ri->link->last_reconn_time = now;
 
     /* Commands connection. */
+    /*执行命令的而连接为空*/
     if (link->cc == NULL) {
 
         /* It might be that the instance is disconnected because it wasn't available earlier when the instance
@@ -2414,6 +2510,11 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
          * Another scenario is that the instance restarted with new ip, and we should resolve its new ip based on
          * its hostname */
         if (sentinel.resolve_hostnames) {
+            /*
+            可能是实例断开了连接，因为在分配实例时（比如在故障切换期间），
+            它不可用，因此我们无法解析其ip。
+            另一种情况是，实例使用新ip重新启动，我们应该根据其主机名解析其新ip
+            */
             sentinelAddr *tryResolveAddr = createSentinelAddr(ri->addr->hostname, ri->addr->port, 0);
             if (tryResolveAddr != NULL) {
                 releaseSentinelAddr(ri->addr);
@@ -2421,6 +2522,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             }
         }
 
+        // 绑定连接
         link->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,server.bind_source_addr);
 
         if (link->cc && !link->cc->err) anetCloexec(link->cc->c.fd);
@@ -2451,7 +2553,13 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
         }
     }
     /* Pub / Sub */
+    
+    /*
+    发布订阅
+    */
     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && link->pc == NULL) {
+        // slave或者slave
+        // 并且pc连接为空
         link->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,server.bind_source_addr);
         if (link->pc && !link->pc->err) anetCloexec(link->pc->c.fd);
         if (!link->pc) {
@@ -2465,6 +2573,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             instanceLinkCloseConnection(link,link->pc);
         } else {
             int retval;
+            // 重连 设置各种callback
             link->pc_conn_time = mstime();
             link->pc->data = link;
             redisAeAttach(server.el,link->pc);
@@ -2473,8 +2582,10 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             redisAsyncSetDisconnectCallback(link->pc,
                     sentinelDisconnectCallback);
             sentinelSendAuthIfNeeded(ri,link->pc);
+            // 设置此client的name
             sentinelSetClientName(ri,link->pc,"pubsub");
             /* Now we subscribe to the Sentinels "Hello" channel. */
+            // 节点都订阅"__sentinel__:hello"
             retval = redisAsyncCommand(link->pc,
                 sentinelReceiveHelloMessages, ri, "%s %s",
                 sentinelInstanceMapCommand(ri,"SUBSCRIBE"),
@@ -2500,6 +2611,12 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
  * 2) It reports itself as a master.
  * 3) It is not SDOWN or ODOWN.
  * 4) We obtained last INFO no more than two times the INFO period time ago. */
+
+// 返回master当前的状态
+// 当前的在配置中的角色是否为master
+// 上报的角色是否为master
+// 节点状态不处于SDOWN 或者 ODOWN 状态
+// 获得INFO回复的时长不超过允许的INFO周期的两倍。
 int sentinelMasterLooksSane(sentinelRedisInstance *master) {
     return
         master->flags & SRI_MASTER &&
@@ -2509,6 +2626,7 @@ int sentinelMasterLooksSane(sentinelRedisInstance *master) {
 }
 
 /* Process the INFO output from masters. */
+// 解析master的info输出
 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     sds *lines;
     int numlines, j;
@@ -2520,6 +2638,9 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
     /* The following fields must be reset to a given value in the case they
      * are not found at all in the INFO output. */
+
+    // 如果在INFO信息中根本找不到以下字段，需要把这些字段重置为给定值。
+    
     ri->master_link_down_time = 0;
 
     /* Process line by line. */
@@ -2534,6 +2655,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
                 ri->runid = sdsnewlen(l+7,40);
             } else {
                 if (strncmp(ri->runid,l+7,40) != 0) {
+                    // 解析info信息发现为重启
                     sentinelEvent(LL_NOTICE,"+reboot",ri,"%@");
 
                     if (ri->flags & SRI_MASTER && ri->master_reboot_down_after_period != 0) {
@@ -2557,6 +2679,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
             if (strstr(l,"ip=") == NULL) {
                 /* Old format. */
+                // 提取slave的ip和port
                 ip = strchr(l,':'); if (!ip) continue;
                 ip++; /* Now ip points to start of ip address. */
                 port = strchr(ip,','); if (!port) continue;
@@ -2566,6 +2689,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
                 *end = '\0'; /* nul term for easy access. */
             } else {
                 /* New format. */
+                // // 提取slave的ip和port
                 ip = strstr(l,"ip="); if (!ip) continue;
                 ip += 3; /* Now ip points to start of ip address. */
                 port = strstr(l,"port="); if (!port) continue;
@@ -2577,7 +2701,11 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
             /* Check if we already have this slave into our table,
              * otherwise add it. */
+            // 查看此slave是否在sentinel的salves中
             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
+                // 如果不存在需要把salve加入到sentinel的实例
+                // 发送发现一个新的salve的事件
+                // 刷新conf文件
                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
                             atoi(port), ri->quorum, ri)) != NULL)
                 {
@@ -2591,15 +2719,18 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         if (sdslen(l) >= 32 &&
             !memcmp(l,"master_link_down_since_seconds",30))
         {
+           // 主从连接中断持续的时间
             ri->master_link_down_time = strtoll(l+31,NULL,10)*1000;
         }
 
         /* role:<role> */
+        // 确定角色 master或者slave
         if (sdslen(l) >= 11 && !memcmp(l,"role:master",11)) role = SRI_MASTER;
         else if (sdslen(l) >= 10 && !memcmp(l,"role:slave",10)) role = SRI_SLAVE;
 
         if (role == SRI_SLAVE) {
             /* master_host:<host> */
+            // 如果发送对象为salve解析master的addr
             if (sdslen(l) >= 12 && !memcmp(l,"master_host:",12)) {
                 if (ri->slave_master_host == NULL ||
                     strcasecmp(l+12,ri->slave_master_host))
@@ -2611,6 +2742,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
             }
 
             /* master_port:<port> */
+            // 如果发送对象为salve解析master的port 
             if (sdslen(l) >= 12 && !memcmp(l,"master_port:",12)) {
                 int slave_master_port = atoi(l+12);
 
@@ -2621,6 +2753,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
             }
 
             /* master_link_status:<status> */
+            // 解析master的连接状态
             if (sdslen(l) >= 19 && !memcmp(l,"master_link_status:",19)) {
                 ri->slave_master_link_status =
                     (strcasecmp(l+19,"up") == 0) ?
@@ -2629,19 +2762,31 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
             }
 
             /* slave_priority:<priority> */
+            // 获取salve的优先级
+            // 在master配置不止一个slave时，如果master故障，在sentinel会把priority最小的提升为master
+            // 如果此值为0，则永远不会被提升为master
             if (sdslen(l) >= 15 && !memcmp(l,"slave_priority:",15))
                 ri->slave_priority = atoi(l+15);
 
             /* slave_repl_offset:<offset> */
+            // salve从master复制的数据量
             if (sdslen(l) >= 18 && !memcmp(l,"slave_repl_offset:",18))
                 ri->slave_repl_offset = strtoull(l+18,NULL,10);
 
             /* replica_announced:<announcement> */
+
+            /*
+            #默认情况下，Redis Sentinel在其报告中包含所有副本。Redis Sentinel的公告中可以排除复制品。
+            “sentinel replications<master>”命令将忽略未通知的副本，并且不会向Redis sentinel的客户端公开。
+
+            此选项不会更改副本优先级的行为。即使replica-announced设置为“否”，
+            副本也可以升级为主副本。如果不想被提升为master，请将priority设置为0.
+            */
             if (sdslen(l) >= 18 && !memcmp(l,"replica_announced:",18))
                 ri->replica_announced = atoi(l+18);
         }
     }
-    ri->info_refresh = mstime();
+    ri->info_refresh = mstime(); // 接收到info的时间
     sdsfreesplitres(lines,numlines);
 
     /* ---------------------------- Acting half -----------------------------
@@ -2649,6 +2794,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
      * still be processed. */
 
     /* Remember when the role changed. */
+    // 记录角色发生改变但是注意sentinel的角色一般是不变化的
     if (role != ri->role_reported) {
         ri->role_reported_time = mstime();
         ri->role_reported = role;
@@ -2674,9 +2820,11 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     }
 
     /* Handle slave -> master role switch. */
+    // 处理从salve被提升到master
     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
         /* If this is a promoted slave we can change state to the
          * failover state machine. */
+        // 如果slave正在被提升为master，需要改变故障转移状态机的状态
         if ((ri->flags & SRI_PROMOTED) &&
             (ri->master->flags & SRI_FAILOVER_IN_PROGRESS) &&
             (ri->master->failover_state ==
@@ -2687,6 +2835,11 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
              * election to perform this failover. This will force the other
              * Sentinels to update their config (assuming there is not
              * a newer one already available). */
+
+            /*
+            现在确定salve被提升为master，将master->config_epoch设置为新的epoch，然后会赢得此故障转移的选举。
+            然后强迫其他sentinel去刷新配置
+            */
             ri->master->config_epoch = ri->master->failover_epoch;
             ri->master->failover_state = SENTINEL_FAILOVER_STATE_RECONF_SLAVES;
             ri->master->failover_state_change_time = mstime();
@@ -2699,14 +2852,18 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
                 ri->master,"%@");
             sentinelCallClientReconfScript(ri->master,SENTINEL_LEADER,
                 "start",ri->master->addr,ri->addr);
+            // 向sentinel和其他slave更新master的状态变化
             sentinelForceHelloUpdateForMaster(ri->master);
         } else {
             /* A slave turned into a master. We want to force our view and
              * reconfigure as slave. Wait some time after the change before
              * going forward, to receive new configs if any. */
             mstime_t wait_time = sentinel_publish_period*4;
+            
 
-            if (!(ri->flags & SRI_PROMOTED) &&
+            // salve不处于被升级状态&& master依然是活跃状态 && 节点是活跃的 && 此salve被上报转换角色的时间>4*sentinel_publish_period
+            // 此时已经有了新的master，向新的master发送salveof 作为从，并且开始同步数据
+            if (!(ri->flags & SRI_PROMOTED) &
                  sentinelMasterLooksSane(ri->master) &&
                  sentinelRedisInstanceNoDownFor(ri,wait_time) &&
                  mstime() - ri->role_reported_time > wait_time)
@@ -2719,6 +2876,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     }
 
     /* Handle slaves replicating to a different master address. */
+    // 依然为slave，但是salve的所属的master发生变化
     if ((ri->flags & SRI_SLAVE) &&
         role == SRI_SLAVE &&
         (ri->slave_master_port != ri->master->addr->port ||
@@ -2728,10 +2886,14 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
         /* Make sure the master is sane before reconfiguring this instance
          * into a slave. */
+
+        // 将此实例与新的master关联之前，请确保新的master处于正常状态
+
         if (sentinelMasterLooksSane(ri->master) &&
             sentinelRedisInstanceNoDownFor(ri,wait_time) &&
             mstime() - ri->slave_conf_change_time > wait_time)
         {
+            // 向新的master发送slaveof ip port
             int retval = sentinelSendSlaveOf(ri,ri->master->addr);
             if (retval == C_OK)
                 sentinelEvent(LL_NOTICE,"+fix-slave-config",ri,"%@");
@@ -2740,10 +2902,13 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
     /* Detect if the slave that is in the process of being reconfigured
      * changed state. */
+
+    // 再次检测正在重新配置的slave是否改变了状态
     if ((ri->flags & SRI_SLAVE) && role == SRI_SLAVE &&
         (ri->flags & (SRI_RECONF_SENT|SRI_RECONF_INPROG)))
     {
         /* SRI_RECONF_SENT -> SRI_RECONF_INPROG. */
+        // 正在同步中
         if ((ri->flags & SRI_RECONF_SENT) &&
             ri->slave_master_host &&
             sentinelAddrEqualsHostname(ri->master->promoted_slave->addr,
@@ -2756,6 +2921,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         }
 
         /* SRI_RECONF_INPROG -> SRI_RECONF_DONE */
+        // 同步已经完成 发送slave-reconf-done日志
         if ((ri->flags & SRI_RECONF_INPROG) &&
             ri->slave_master_link_status == SENTINEL_MASTER_LINK_STATUS_UP)
         {
@@ -2766,6 +2932,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     }
 }
 
+// sentinel 从master接收info的callback
+// 解析master的info信息
 void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
     sentinelRedisInstance *ri = privdata;
     instanceLink *link = c->data;
@@ -2781,6 +2949,8 @@ void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata
 
 /* Just discard the reply. We use this when we are not monitoring the return
  * value of the command but its effects directly. */
+
+// 不监控应答使用此函数
 void sentinelDiscardReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
     instanceLink *link = c->data;
     UNUSED(reply);
@@ -2806,7 +2976,10 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
             strncmp(r->str,"LOADING",7) == 0 ||
             strncmp(r->str,"MASTERDOWN",10) == 0)
         {
+            // 接收到回复
+            // 更新上次结束的时间
             link->last_avail_time = mstime();
+            // 标记接收到pong消息
             link->act_ping_time = 0; /* Flag the pong as received. */
 
             if (ri->flags & SRI_MASTER_REBOOT && strncmp(r->str,"PONG",4) == 0)
@@ -2815,6 +2988,9 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
         } else {
             /* Send a SCRIPT KILL command if the instance appears to be
              * down because of a busy script. */
+            // 如果实例因为执行脚本而处于下线状态
+            // 并且实例并没有关闭脚本
+            // 需要发送kill命令关闭脚本
             if (strncmp(r->str,"BUSY",4) == 0 &&
                 (ri->flags & SRI_S_DOWN) &&
                 !(ri->flags & SRI_SCRIPT_KILL_SENT))
@@ -2826,15 +3002,18 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
                 {
                     ri->link->pending_commands++;
                 }
-                ri->flags |= SRI_SCRIPT_KILL_SENT;
+                ri->flags |= SRI_SCRIPT_KILL_SENT; // 实例状态更新为SRI_SCRIPT_KILL_SENT
             }
         }
     }
+    // 记录本次收到回复的时间
     link->last_pong_time = mstime();
 }
 
 /* This is called when we get the reply about the PUBLISH command we send
  * to the master to advertise this sentinel. */
+
+// 当我们收到关于发布命令的回复时
 void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
     sentinelRedisInstance *ri = privdata;
     instanceLink *link = c->data;
@@ -2855,6 +3034,14 @@ void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privd
  *
  * If the master name specified in the message is not known, the message is
  * discarded. */
+
+// 解析订阅"__sentinel__:hello"频道的消息
+/*
+处理通过master或slave实例中的Pub/Sub接收的hello消息，
+或通过sentinel的（假）PUBLISH命令直接发送到此sentinel。
+*
+*如果消息中指定的主名称未知，则消息将被丢弃。
+*/
 void sentinelProcessHelloMessage(char *hello, int hello_len) {
     /* Format is composed of 8 tokens:
      * 0=ip,1=port,2=runid,3=current_epoch,4=master_name,
@@ -2872,6 +3059,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
         /* First, try to see if we already have this sentinel. */
         port = atoi(token[1]);
         master_port = atoi(token[6]);
+        // 根据节点节点ip、节点端口、runid获取sentinel实例
         si = getSentinelRedisInstanceByAddrAndRunID(
                         master->sentinels,token[0],port,token[2]);
         current_epoch = strtoull(token[3],NULL,10);
@@ -2881,6 +3069,9 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
             /* If not, remove all the sentinels that have the same runid
              * because there was an address change, and add the same Sentinel
              * with the new address back. */
+            /*
+            根据runid获取不到sentinel，则地址已经发生改变，先移除旧的sentinel然后添加新的。
+            */
             removed = removeMatchingSentinelFromMaster(master,token[2]);
             if (removed) {
                 sentinelEvent(LL_NOTICE,"+sentinel-address-switch",master,
@@ -2890,6 +3081,8 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                  * new one is reporting. What we do if this happens is to set its
                  * port to 0, to signal the address is invalid. We'll update it
                  * later if we get an HELLO message. */
+
+                // 检查是否有使用此addr的就sentinel节点，如果有需要在所有mastr中移除
                 sentinelRedisInstance *other =
                     getSentinelRedisInstanceByAddrAndRunID(
                         master->sentinels, token[0],port,NULL);
@@ -2914,6 +3107,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
             }
 
             /* Add the new sentinel. */
+            // 创建新的sentnel进入列表
             si = createSentinelRedisInstance(token[2],SRI_SENTINEL,
                             token[0],port,master->quorum,master);
 
@@ -2922,14 +3116,20 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
                 /* The runid is NULL after a new instance creation and
                  * for Sentinels we don't have a later chance to fill it,
                  * so do it now. */
+                // si设置runid
                 si->runid = sdsnew(token[2]);
+                // 为sentinel创建连接
                 sentinelTryConnectionSharing(si);
                 if (removed) sentinelUpdateSentinelAddressInAllMasters(si);
+                // 刷新日志
                 sentinelFlushConfig();
             }
         }
 
         /* Update local current_epoch if received current_epoch is greater.*/
+        /*
+        如果接收到的epoch比现在的epoch高，则更新新的epoch
+        */
         if (current_epoch > sentinel.current_epoch) {
             sentinel.current_epoch = current_epoch;
             sentinelFlushConfig();
@@ -2938,20 +3138,29 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
         }
 
         /* Update master info if received configuration is newer. */
+        // 更新有关master的新的配置信息
         if (si && master->config_epoch < master_config_epoch) {
+            // 能够查询到对应的sentinel节点，配置纪元<给定的配置纪元，则配置信息发生改变
+            // 需要更新信息
             master->config_epoch = master_config_epoch;
+            
+            // 端口不相同，或者根据主节点名字获取不到端口
             if (master_port != master->addr->port ||
                 !sentinelAddrEqualsHostname(master->addr, token[5]))
             {
                 sentinelAddr *old_addr;
 
+                // 向config-update-from发送消息并记录日志
                 sentinelEvent(LL_WARNING,"+config-update-from",si,"%@");
+                // 向switch-master频道发送event,并记录日志, 主节点切换
                 sentinelEvent(LL_WARNING,"+switch-master",
                     master,"%s %s %d %s %d",
                     master->name,
                     announceSentinelAddr(master->addr), master->addr->port,
                     token[5], master_port);
 
+                // 在seninels列表中更新master已经发生改变
+                // 记录日志或者根据script配置的相关信息
                 old_addr = dupSentinelAddr(master->addr);
                 sentinelResetMasterAndChangeAddress(master, token[5], master_port);
                 sentinelCallClientReconfScript(master,
@@ -3011,6 +3220,11 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
  *
  * Returns C_OK if the PUBLISH was queued correctly, otherwise
  * C_ERR is returned. */
+
+// 通过pub/sub向"_sentinel:hello"频道发送一条消息，以便于广播sentinel对master节点的配置判断，以及告知sentinel自身的信息。
+// 消息的格式如下：sentinel_ip,sentinel_port,sentinel_runid,current_epoch,master_name,
+// master_ip,master_port,master_concig_epoch
+
 int sentinelSendHello(sentinelRedisInstance *ri) {
     char ip[NET_IP_STR_LEN];
     char payload[NET_IP_STR_LEN+1024];
@@ -3020,10 +3234,11 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
     sentinelRedisInstance *master = (ri->flags & SRI_MASTER) ? ri : ri->master;
     sentinelAddr *master_addr = sentinelGetCurrentMasterAddress(master);
 
-    if (ri->link->disconnected) return C_ERR;
+    if (ri->link->disconnected) return C_ERR; // 当前节点已经下线返回错误
 
     /* Use the specified announce address if specified, otherwise try to
      * obtain our own IP address. */
+    // 如果指定发布地址，请使用指定的发布地址，没有的尝试获取自己的ip地址。
     if (sentinel.announce_ip) {
         announce_ip = sentinel.announce_ip;
     } else {
@@ -3040,10 +3255,10 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
         "%s,%d,%s,%llu," /* Info about this sentinel. */
         "%s,%s,%d,%llu", /* Info about current master. */
         announce_ip, announce_port, sentinel.myid,
-        (unsigned long long) sentinel.current_epoch,
+        (unsigned long long) sentinel.current_epoch,  // sentinel节点自身信息
         /* --- */
         master->name,announceSentinelAddr(master_addr),master_addr->port,
-        (unsigned long long) master->config_epoch);
+        (unsigned long long) master->config_epoch); // master 配置信息
     retval = redisAsyncCommand(ri->link->cc,
         sentinelPublishReplyCallback, ri, "%s %s %s",
         sentinelInstanceMapCommand(ri,"PUBLISH"),
@@ -3076,6 +3291,10 @@ void sentinelForceHelloUpdateDictOfRedisInstances(dict *instances) {
  * with a period of SENTINEL_PUBLISH_PERIOD milliseconds, however when a
  * Sentinel upgrades a configuration it is a good idea to deliver an update
  * to the other Sentinels ASAP. */
+
+/*
+此函数强制将hello消息通知到和master相关的sentinels和slavels
+*/
 int sentinelForceHelloUpdateForMaster(sentinelRedisInstance *master) {
     if (!(master->flags & SRI_MASTER)) return C_ERR;
     if (master->last_pub_time >= (sentinel_publish_period+1))
@@ -3090,16 +3309,22 @@ int sentinelForceHelloUpdateForMaster(sentinelRedisInstance *master) {
  *
  * On error zero is returned, and we can't consider the PING command
  * queued in the connection. */
+
+// 向节点发送ping命令进行检测存活
 int sentinelSendPing(sentinelRedisInstance *ri) {
     int retval = redisAsyncCommand(ri->link->cc,
         sentinelPingReplyCallback, ri, "%s",
         sentinelInstanceMapCommand(ri,"PING"));
     if (retval == C_OK) {
+        // 接收到pong回复
         ri->link->pending_commands++;
-        ri->link->last_ping_time = mstime();
+        // 更新最后的ping时间
+        ri->link->last_ping_time = mstime(); 
         /* We update the active ping time only if we received the pong for
          * the previous ping, otherwise we are technically waiting since the
          * first ping that did not receive a reply. */
+
+        // 只第一次的ping或者pong回复才更新act_ping_time时间
         if (ri->link->act_ping_time == 0)
             ri->link->act_ping_time = ri->link->last_ping_time;
         return 1;
@@ -3110,6 +3335,9 @@ int sentinelSendPing(sentinelRedisInstance *ri) {
 
 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
  * the specified master or slave instance. */
+
+// 通过定期向指定的master或者slave发送PING、INFO 或者定期发送到hello 频道
+// 来实现sentinel对主节点的监控、各sentinel之间的通信、及时感知新的slaver加入到主从中。
 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
     mstime_t now = mstime();
     mstime_t info_period, ping_period;
@@ -3125,6 +3353,10 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
      * properly (note that anyway there is a redundant protection about this,
      * that is, the link will be disconnected and reconnected if a long
      * timeout condition is detected. */
+
+    // 对于如INFO, PING, PUBLISH等非关键命令，我们有SENTINEL_MAX_PENDING_COMMANDS的限制。
+    // 我们不希望仅仅因为连接不工作就使用大量内存（请注意，无论如何，这是一种冗余保护，即，如果检测到长超时情况，链接将被断开并重新连接).
+
     if (ri->link->pending_commands >=
         SENTINEL_MAX_PENDING_COMMANDS * ri->link->refcount) return;
 
@@ -3136,18 +3368,31 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
      * Similarly we monitor the INFO output more often if the slave reports
      * to be disconnected from the master, so that we can have a fresh
      * disconnection time figure. */
+
+    /*
+    如果是处于O_DOWN的master的slave。 我们每隔1s发送一条INFO命令，而不是使用SENTINEL_INFO_PERIOD（默认10s）时间。
+    在这种情况下需要密切监听此salve，来发现此salve被其他sentinel或者系统管理员提升为master。
+
+    同样如果salve报告与master断开连接，我们会更频繁的监控INFO输出，这样我们就能及时的发现断开连接的时间。
+    */
+
+    // 此节点为从节点，或者主节点处于下线或者故障转移状态
     if ((ri->flags & SRI_SLAVE) &&
         ((ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS)) ||
          (ri->master_link_down_time != 0)))
     {
-        info_period = 1000;
+        info_period = 1000; // 每个1秒钟发送INFO
     } else {
-        info_period = sentinel_info_period;
+        info_period = sentinel_info_period; // 隔10s发送消息
     }
 
     /* We ping instances every time the last received pong is older than
      * the configured 'down-after-milliseconds' time, but every second
      * anyway if 'down-after-milliseconds' is greater than 1 second. */
+   /*
+   每上一次接收到的pong回复的时间比配置的'down-after-milliseconds'时间早，我们都会发送ping命令。
+   如果配置的'down-after-milliseconds' > 1s，我们也是1s发送一次ping
+   */
     ping_period = ri->down_after_period;
     if (ping_period > sentinel_ping_period) ping_period = sentinel_ping_period;
 
@@ -3156,6 +3401,8 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
         (ri->info_refresh == 0 ||
         (now - ri->info_refresh) > info_period))
     {
+       // 只能给masters或者slaves发送"INFO"命令
+       // 并且节点没有接收到info回复或者接收到的info的回复已经超过info_period时间
         retval = redisAsyncCommand(ri->link->cc,
             sentinelInfoReplyCallback, ri, "%s",
             sentinelInstanceMapCommand(ri,"INFO"));
@@ -3163,12 +3410,15 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
     }
 
     /* Send PING to all the three kinds of instances. */
+    // 向masters、slaves、其余sentinels三种类型发送ping消息
+    // 获取pong的时间已经超过ping_period就ping消息（默认1s)
     if ((now - ri->link->last_pong_time) > ping_period &&
                (now - ri->link->last_ping_time) > ping_period/2) {
         sentinelSendPing(ri);
     }
 
     /* PUBLISH hello messages to all the three kinds of instances. */
+    // 上一次向hello channel发送的时间已经超过sentinel_publish_period(默认2s)
     if ((now - ri->last_pub_time) > sentinel_publish_period) {
         sentinelSendHello(ri);
     }
@@ -4407,6 +4657,9 @@ seterr:
  *
  * Because we have a Sentinel PUBLISH, the code to send hello messages is the same
  * for all the three kind of instances: masters, slaves, sentinels. */
+
+// 用来发布命令：实际只是用来接收来自其他sentinel实例的hello消息，并且禁止发布到sentinel_hello以外的其他频道
+// 因为同事只有一个sentinel发布，所以发送消息hello的代码对master、slaves、sentinels都是相同的。
 void sentinelPublishCommand(client *c) {
     if (strcmp(c->argv[1]->ptr,SENTINEL_HELLO_CHANNEL)) {
         addReplyError(c, "Only HELLO messages are accepted by Sentinel instances.");
@@ -4419,12 +4672,15 @@ void sentinelPublishCommand(client *c) {
 /* ===================== SENTINEL availability checks ======================= */
 
 /* Is this instance down from our point of view? */
+// 检测主观下线和主观下线
 void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
     mstime_t elapsed = 0;
 
     if (ri->link->act_ping_time)
+        // 获取上次ping检测的时间
         elapsed = mstime() - ri->link->act_ping_time;
     else if (ri->link->disconnected)
+        // 获取失联的时间
         elapsed = mstime() - ri->link->last_avail_time;
 
     /* Check if we are in need for a reconnection of one of the
@@ -4433,6 +4689,12 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
      * 1) Check if the command link seems connected, was connected not less
      *    than SENTINEL_MIN_LINK_RECONNECT_PERIOD, but still we have a
      *    pending ping for more than half the timeout. */
+
+// 检查我们是否需要重新连接其中一条链路，因为我们检测到低活动。
+// 
+// 检查命令链接是否已连接，连接时间是否不少于SENTINEL_MIN_link_RECONNECT_PERIOD，
+// 但仍有超过一半超时时间的挂起ping。
+
     if (ri->link->cc &&
         (mstime() - ri->link->cc_conn_time) >
         sentinel_min_link_reconnect_period &&
@@ -4442,6 +4704,7 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
         (mstime() - ri->link->act_ping_time) > (ri->down_after_period/2) &&
         (mstime() - ri->link->last_pong_time) > (ri->down_after_period/2))
     {
+        // 重新连接
         instanceLinkCloseConnection(ri->link,ri->link->cc);
     }
 
@@ -4450,11 +4713,17 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
      *    activity in the Pub/Sub channel for more than
      *    SENTINEL_PUBLISH_PERIOD * 3.
      */
+
+    /*
+    检查pubsub链接是否已连接，连接时间是否不少于SENTINEL_MIN_link_RECONNECT_PERIOD，
+    但我们在Pub/Sub频道中的活动时间是否超过SENTINEL_PUBLISH_PERIOD*3。
+    */
     if (ri->link->pc &&
         (mstime() - ri->link->pc_conn_time) >
          sentinel_min_link_reconnect_period &&
         (mstime() - ri->link->pc_last_activity) > (sentinel_publish_period*3))
     {
+       // 重新连接pubsub
         instanceLinkCloseConnection(ri->link,ri->link->pc);
     }
 
@@ -4464,6 +4733,13 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
      * 2) We believe it is a master, it reports to be a slave for enough time
      *    to meet the down_after_period, plus enough time to get two times
      *    INFO report from the instance. */
+    /*
+    如下情况更新SDOWN标志：
+    1）它没有回复。
+    2）我们认为它是一个主服务器，在足够满足down_after_period的时间内报告称自己是一个从服务器，
+    并且报告角色的时间>down_after_period+sentinel接收到INFO的时间*2。
+    3) 是重启的主，并且重启的时间间隔足够满足重启的限制时间。
+    */
     if (elapsed > ri->down_after_period ||
         (ri->flags & SRI_MASTER &&
          ri->role_reported == SRI_SLAVE &&
@@ -4473,6 +4749,7 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
            mstime()-ri->master_reboot_since_time > ri->master_reboot_down_after_period))
     {
         /* Is subjectively down */
+        // 设置为客观下线
         if ((ri->flags & SRI_S_DOWN) == 0) {
             sentinelEvent(LL_WARNING,"+sdown",ri,"%@");
             ri->s_down_since_time = mstime();
@@ -4480,6 +4757,7 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
         }
     } else {
         /* Is subjectively up */
+        //  如果为主观下线，撤销主观下线
         if (ri->flags & SRI_S_DOWN) {
             sentinelEvent(LL_WARNING,"-sdown",ri,"%@");
             ri->flags &= ~(SRI_S_DOWN|SRI_SCRIPT_KILL_SENT);
@@ -4493,36 +4771,53 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
  * reported in a given time range that the instance was not reachable.
  * However messages can be delayed so there are no strong guarantees about
  * N instances agreeing at the same time about the down state. */
+
+// 如果sentinelsNum >= quorum 认为master不可达，则认为master已经下线，发起故障转移
+// 此函数对于ODOWN是一个弱一致状态，因为消息可能会延迟。
 void sentinelCheckObjectivelyDown(sentinelRedisInstance *master) {
     dictIterator *di;
     dictEntry *de;
     unsigned int quorum = 0, odown = 0;
 
-    if (master->flags & SRI_S_DOWN) {
+    // 是否有足够的sentinels的节点同意master的DOWN状态
+    // 
+    if (master->flags & SRI_S_DOWN) { // 主观下线
         /* Is down for enough sentinels? */
         quorum = 1; /* the current sentinel. */
         /* Count all the other sentinels. */
         di = dictGetIterator(master->sentinels);
         while((de = dictNext(di)) != NULL) {
+            // 获取其他sentinel的节点对于MASTER的状态，如果为DOWN状态
+            // quorum ++
             sentinelRedisInstance *ri = dictGetVal(de);
 
             if (ri->flags & SRI_MASTER_DOWN) quorum++;
         }
         dictReleaseIterator(di);
+        // 如果同意的sentine节点数量 >= (sentinel monitor masterName ip port quorum)
+        // 则一致认为mast处于下线状态
         if (quorum >= master->quorum) odown = 1;
     }
 
     /* Set the flag accordingly to the outcome. */
+    // 客观下线
     if (odown) {
+        // master 不处于客观下线
         if ((master->flags & SRI_O_DOWN) == 0) {
+            // 记录一下处于WARNING级别的master下线日志
             sentinelEvent(LL_WARNING,"+odown",master,"%@ #quorum %d/%d",
                 quorum, master->quorum);
+            // 设置处于客观下线状态
             master->flags |= SRI_O_DOWN;
+            // 记录本次同意的master下线时间
             master->o_down_since_time = mstime();
         }
     } else {
+        // 处于客观下线
         if (master->flags & SRI_O_DOWN) {
+            // 记录一个WARNING日志
             sentinelEvent(LL_WARNING,"-odown",master,"%@");
+            // 与SRI_O_DOWN的取反结果进行与
             master->flags &= ~SRI_O_DOWN;
         }
     }
@@ -4530,6 +4825,8 @@ void sentinelCheckObjectivelyDown(sentinelRedisInstance *master) {
 
 /* Receive the SENTINEL is-master-down-by-addr reply, see the
  * sentinelAskMasterStateToOtherSentinels() function for more information. */
+
+// sentinel 节点接收其他sentinel节点关于is-master-down-by-addr问询的回复
 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
     sentinelRedisInstance *ri = privdata;
     instanceLink *link = c->data;
@@ -4547,6 +4844,7 @@ void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *p
         r->element[1]->type == REDIS_REPLY_STRING &&
         r->element[2]->type == REDIS_REPLY_INTEGER)
     {
+        // 更新接收到回复
         ri->last_master_down_reply_time = mstime();
         if (r->element[0]->integer == 1) {
             ri->flags |= SRI_MASTER_DOWN;
@@ -4556,13 +4854,19 @@ void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *p
         if (strcmp(r->element[1]->str,"*")) {
             /* If the runid in the reply is not "*" the Sentinel actually
              * replied with a vote. */
+             /*
+             如果回复中的runid不是“*”，哨兵实际上会以投票的方式回复。
+             */
             sdsfree(ri->leader);
             if ((long long)ri->leader_epoch != r->element[2]->integer)
+               // 如果纪元数不同则记录，sentinel已经接收到一票
                 serverLog(LL_WARNING,
                     "%s voted for %s %llu", ri->name,
                     r->element[1]->str,
                     (unsigned long long) r->element[2]->integer);
+            // 更新leader
             ri->leader = sdsnew(r->element[1]->str);
+            // 更新新的纪元
             ri->leader_epoch = r->element[2]->integer;
         }
     }
@@ -4572,6 +4876,8 @@ void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *p
  * SENTINEL IS-MASTER-DOWN-BY-ADDR requests to other sentinels
  * in order to get the replies that allow to reach the quorum
  * needed to mark the master in ODOWN state and trigger a failover. */
+// 如果认为master已经下线，需要向其他sentinel节点发送IS-MASTER-DOWN-BY-ADDR消息，
+// 根据sentinel的回复数量，来达到将主机标记为ODOWN状态并触发故障切换所需的quorum数量。
 #define SENTINEL_ASK_FORCED (1<<0)
 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
     dictIterator *di;
@@ -4580,11 +4886,14 @@ void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int f
     di = dictGetIterator(master->sentinels);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
+        // 获取sentinel记录的sentinel发起的最后一个is-master-down问询的时间
         mstime_t elapsed = mstime() - ri->last_master_down_reply_time;
         char port[32];
         int retval;
 
         /* If the master state from other sentinel is too old, we clear it. */
+        // sentinel发起lis-master-down问询的时间 > sentinel_ask_period*5 （5s)
+        // 此sentinel清空记录的master
         if (elapsed > sentinel_ask_period*5) {
             ri->flags &= ~SRI_MASTER_DOWN;
             sdsfree(ri->leader);
@@ -4596,13 +4905,19 @@ void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int f
          * 1) We believe it is down, or there is a failover in progress.
          * 2) Sentinel is connected.
          * 3) We did not receive the info within SENTINEL_ASK_PERIOD ms. */
+
+        // 只有处于客观下线才会检测
         if ((master->flags & SRI_S_DOWN) == 0) continue;
+        // 如果sentine处于失联状态，不问询
         if (ri->link->disconnected) continue;
+        // 在sentinel_ask_period时间内master已经接收过info消息 && 并且当前节点不是处于接收ask消息的状态
         if (!(flags & SENTINEL_ASK_FORCED) &&
             mstime() - ri->last_master_down_reply_time < sentinel_ask_period)
             continue;
 
+        // 不满足以上三种状态发起（s-master-down-by-addr）问询
         /* Ask */
+        // 向其他sentinel发送is-master-down-by-addr命令 ，使自己成为领导者，负责故障转移
         ll2string(port,sizeof(port),master->addr->port);
         retval = redisAsyncCommand(ri->link->cc,
                     sentinelReceiveIsMasterDownReply, ri,
@@ -4612,6 +4927,8 @@ void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int f
                     sentinel.current_epoch,
                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
                     sentinel.myid : "*");
+        // 成功，响应命令数目+1. 因为redis单线程运行，不会并发计算此数目
+        // 因此这里如果接下来马上使用，可以认为统一下线数目+1
         if (retval == C_OK) ri->link->pending_commands++;
     }
     dictReleaseIterator(di);
@@ -4631,25 +4948,37 @@ void sentinelSimFailureCrash(void) {
  *
  * If a vote is not available returns NULL, otherwise return the Sentinel
  * runid and populate the leader_epoch with the epoch of the vote. */
+
+
 char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
     if (req_epoch > sentinel.current_epoch) {
+        // 选出的leader的纪元>sentinel纪元
+        // 更新sentinel当前的纪元
         sentinel.current_epoch = req_epoch;
         sentinelFlushConfig();
+        // 发送日志通知记录先的纪元
         sentinelEvent(LL_WARNING,"+new-epoch",master,"%llu",
             (unsigned long long) sentinel.current_epoch);
     }
 
     if (master->leader_epoch < req_epoch && sentinel.current_epoch <= req_epoch)
     {
-        sdsfree(master->leader);
-        master->leader = sdsnew(req_runid);
-        master->leader_epoch = sentinel.current_epoch;
+        // 当前mster<给定的纪元,sentinel < 给定的纪元
+        sdsfree(master->leader); // 清空原先存储的master信息
+        master->leader = sdsnew(req_runid); // 把runid对应的节点记录为leader
+        master->leader_epoch = sentinel.current_epoch; // 更新leader的纪元
         sentinelFlushConfig();
+        //  记录leader接收到一票的日志
         sentinelEvent(LL_WARNING,"+vote-for-leader",master,"%s %llu",
             master->leader, (unsigned long long) master->leader_epoch);
         /* If we did not voted for ourselves, set the master failover start
          * time to now, in order to force a delay before we can start a
+       
          * failover for the same master. */
+        /*
+        如果我们没有为自己投票，请将主故障切换开始时间设置为“现在”，
+        以便在我们可以为同一主设备启动故障切换之前强制延迟。
+        */
         if (strcasecmp(master->leader,sentinel.myid))
             master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
     }
@@ -4671,10 +5000,13 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
 
     de = dictAddRaw(counters,runid,&existing);
     if (existing) {
+        // 从字典中获取已经存在的数目
         oldval = dictGetUnsignedIntegerVal(existing);
+        // 对存在的数目+1
         dictSetUnsignedIntegerVal(existing,oldval+1);
         return oldval+1;
     } else {
+        // 如果不存在，直接记录为1
         serverAssert(de != NULL);
         dictSetUnsignedIntegerVal(de,1);
         return 1;
@@ -4687,6 +5019,12 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
  * To be a leader for a given epoch, we should have the majority of
  * the Sentinels we know (ever seen since the last SENTINEL RESET) that
  * reported the same instance as leader for the same epoch. */
+
+/*
+扫描所有的sentinels确定master是否是此纪元内的领导者
+必须半数以上的sentinelj节点的epoch和master的epoch相同，那么master才是此epoch内的leader
+*/
+
 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     dict *counters;
     dictIterator *di;
@@ -4706,7 +5044,9 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     di = dictGetIterator(master->sentinels);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
+        // 比较sentinel记录的leader纪元和当前的sentinel纪元是否相同
         if (ri->leader != NULL && ri->leader_epoch == sentinel.current_epoch)
+            // 同意节点为leader的数目+1, counters哈希表记录sentinel持有的leader
             sentinelLeaderIncr(counters,ri->leader);
     }
     dictReleaseIterator(di);
@@ -4714,26 +5054,31 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     /* Check what's the winner. For the winner to win, it needs two conditions:
      * 1) Absolute majority between voters (50% + 1).
      * 2) And anyway at least master->quorum votes. */
+
     di = dictGetIterator(counters);
     while((de = dictNext(di)) != NULL) {
+        // 记录的sentinel同意master为leader的最大票数
         uint64_t votes = dictGetUnsignedIntegerVal(de);
-
         if (votes > max_votes) {
-            max_votes = votes;
-            winner = dictGetKey(de);
+            max_votes = votes;     // 记录最多的票数
+            winner = dictGetKey(de); // 记录同意的数目最多的leader的id 胜出的leader
         }
     }
     dictReleaseIterator(di);
+
 
     /* Count this Sentinel vote:
      * if this Sentinel did not voted yet, either vote for the most
      * common voted sentinel, or for itself if no vote exists at all. */
     if (winner)
+        // 统计sentinel
         myvote = sentinelVoteLeader(master,epoch,winner,&leader_epoch);
     else
+       // 如果没有接收票数最多的sentinel，给自己一票
         myvote = sentinelVoteLeader(master,epoch,sentinel.myid,&leader_epoch);
 
     if (myvote && leader_epoch == epoch) {
+        // 获取同意的leader的票数
         uint64_t votes = sentinelLeaderIncr(counters,myvote);
 
         if (votes > max_votes) {
@@ -4743,6 +5088,8 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     }
 
     voters_quorum = voters/2+1;
+    // 如果sentinel的票数小于max(num(sentinel) + 1, quorum)
+    // 则选举出的领导者设置为空，如果本次没有选举出领导者，需要进入下一轮选举
     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
         winner = NULL;
 
@@ -4762,6 +5109,15 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
  * The command returns C_OK if the SLAVEOF command was accepted for
  * (later) delivery otherwise C_ERR. The command replies are just
  * discarded. */
+
+/*
+将SLAVEOF发送到指定的实例，并始终后跟一个CONFIG REWRITE命令，以便在可能的情况下将新配置存储在磁盘上
+（如果Redis实例足够新，支持配置重写，并且服务器是用配置文件启动的）。
+*
+*如果主机为空，函数将发送“无人服务”。
+*如果SLAVEOF命令被接受（稍后）传递，则该命令返回C_OK，否则返回C_ERR。命令回复被丢弃
+*/
+
 int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
     char portstr[32];
     const char *host;
@@ -4770,6 +5126,7 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
     /* If host is NULL we send SLAVEOF NO ONE that will turn the instance
     * into a master. */
     if (!addr) {
+        // addr 为空发送 slaveof no one 来断开复制
         host = "NO";
         memcpy(portstr,"ONE",4);
     } else {
@@ -4787,22 +5144,30 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
      *
      * Note that we don't check the replies returned by commands, since we
      * will observe instead the effects in the next INFO output. */
+    /*
+    为了以安全的方式发送slaveof命令，我们发送了执行一下任务的事务:
+    1 根据指定的host/post重新配置实例
+    2 重写配置
+    3 断开所有客户端连接(除了发送命令的这一个)，以便触发已连接客户端的ask master on reconnection协议。
+
+    *请注意，我们不会检查命令返回的回复，因为我们将在下一个信息输出中观察效果
+    */
     retval = redisAsyncCommand(ri->link->cc,
         sentinelDiscardReplyCallback, ri, "%s",
-        sentinelInstanceMapCommand(ri,"MULTI"));
+        sentinelInstanceMapCommand(ri,"MULTI")); // 发送mulit命令 标记事务开始
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
     retval = redisAsyncCommand(ri->link->cc,
         sentinelDiscardReplyCallback, ri, "%s %s %s",
-        sentinelInstanceMapCommand(ri,"SLAVEOF"),
+        sentinelInstanceMapCommand(ri,"SLAVEOF"), // 发送 slaveof host port 命令 作为
         host, portstr);
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
     retval = redisAsyncCommand(ri->link->cc,
-        sentinelDiscardReplyCallback, ri, "%s REWRITE",
-        sentinelInstanceMapCommand(ri,"CONFIG"));
+        sentinelDiscardReplyCallback, ri, "%s REWRITE", 
+        sentinelInstanceMapCommand(ri,"CONFIG")); // 发送一个REWRITE重写配置文件
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
@@ -4811,6 +5176,8 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
      * an issue because CLIENT is variadic command, so Redis will not
      * recognized as a syntax error, and the transaction will not fail (but
      * only the unsupported command will fail). */
+
+    // 杀死所有连接的客户端
     for (int type = 0; type < 2; type++) {
         retval = redisAsyncCommand(ri->link->cc,
             sentinelDiscardReplyCallback, ri, "%s KILL TYPE %s",
@@ -4820,6 +5187,7 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
         ri->link->pending_commands++;
     }
 
+    // 事务执行exec
     retval = redisAsyncCommand(ri->link->cc,
         sentinelDiscardReplyCallback, ri, "%s",
         sentinelInstanceMapCommand(ri,"EXEC"));
@@ -4832,14 +5200,22 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
 /* Setup the master state to start a failover. */
 void sentinelStartFailover(sentinelRedisInstance *master) {
     serverAssert(master->flags & SRI_MASTER);
-
+    // master 状态更新为等待故障转移开始
     master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;
+    // 主节点状态更新为正在进行故障转移
     master->flags |= SRI_FAILOVER_IN_PROGRESS;
+    // master的故障转移纪元，等于哨兵设置的当前纪元+1
+    // 当前故障转移纪元+1
     master->failover_epoch = ++sentinel.current_epoch;
+    // 记录发起故障转移新纪元
+    // 记录new-epoch日志并发送通知
     sentinelEvent(LL_WARNING,"+new-epoch",master,"%llu",
         (unsigned long long) sentinel.current_epoch);
+    // 记录try-failover日志并发送通知
     sentinelEvent(LL_WARNING,"+try-failover",master,"%@");
+    // 随机生成一个发起故障转移的时
     master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
+    // 记录改变为故障转移状态的时间
     master->failover_state_change_time = mstime();
 }
 
@@ -4854,14 +5230,24 @@ void sentinelStartFailover(sentinelRedisInstance *master) {
  * start the failover but that we'll not be able to act.
  *
  * Return non-zero if a failover was started. */
+
+// 此函数用来检测是否符合发起故障转移的情况：
+// 1 master必须下线
+// 2 没有故障转移正在进行
+// 3 最近没有尝试故障转移
+// 故障转移可能失败
 int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
     /* We can't failover if the master is not in O_DOWN state. */
-    if (!(master->flags & SRI_O_DOWN)) return 0;
+    // master没有处于SRI_O_DOWN(客观下线)，不需要故障转移
+    if (!(master->flags & SRI_O_DOWN)) return 0; 
 
     /* Failover already in progress? */
+    // 如果正处于故障转移状态，不需要进行故障转移
     if (master->flags & SRI_FAILOVER_IN_PROGRESS) return 0;
 
     /* Last failover attempt started too little time ago? */
+    // 最后一次的故障转移距离现在非常近
+    // 发起一次故障转移，在failover_timeout*2时间之内不能在发起
     if (mstime() - master->failover_start_time <
         master->failover_timeout*2)
     {
@@ -4879,7 +5265,7 @@ int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
         }
         return 0;
     }
-
+    // 哨兵发起故障转移(更新主节点的状态和时间)
     sentinelStartFailover(master);
     return 1;
 }
@@ -4916,16 +5302,35 @@ int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
 /* Helper for sentinelSelectSlave(). This is used by qsort() in order to
  * sort suitable slaves in a "better first" order, to take the first of
  * the list. */
+
+/*
+选择合适的从机进行升级，当前算法仅仅使用一下情况：
+1 S_DOWN, O_DOWN, DISCONNECTED.
+2 上次slave回复的时间不超过ping回复周期的5倍。
+3 info刷新(nfo_refresh)的时间不超过info刷新周期的3倍。
+4 和主断开连接(master_link_down)时间不超过：(now - master->s_down_since_time) + (master->down_after_period * 10).
+
+基本上由于主设备与POV断开，从设备报告断开连接的时间不超过配置断开后时间的10倍。
+这几乎是一种常识，就是master不在，slave可能会落后，但是不会落后很多时间。
+
+我们将从符合上述条件的salves中根据复制偏移量和优先级选择合适的salve:
+-较低的从属优先级。
+更大的已处理复制偏移量。(这样存储的数据尽可能的多)
+按字典顺序较小的runid。（salve尽可能靠前）
+*/
+
 int compareSlavesForPromotion(const void *a, const void *b) {
     sentinelRedisInstance **sa = (sentinelRedisInstance **)a,
                           **sb = (sentinelRedisInstance **)b;
     char *sa_runid, *sb_runid;
 
     if ((*sa)->slave_priority != (*sb)->slave_priority)
+        // 更低的优先级
         return (*sa)->slave_priority - (*sb)->slave_priority;
 
     /* If priority is the same, select the slave with greater replication
      * offset (processed more data from the master). */
+    // 优先级相同更高的复制偏移量
     if ((*sa)->slave_repl_offset > (*sb)->slave_repl_offset) {
         return -1; /* a < b */
     } else if ((*sa)->slave_repl_offset < (*sb)->slave_repl_offset) {
@@ -4936,6 +5341,7 @@ int compareSlavesForPromotion(const void *a, const void *b) {
      * the lexicographically smaller runid. Note that we try to handle runid
      * == NULL as there are old Redis versions that don't publish runid in
      * INFO. A NULL runid is considered bigger than any other runid. */
+     // 复制偏移量相同，更小的runid排序
     sa_runid = (*sa)->runid;
     sb_runid = (*sb)->runid;
     if (sa_runid == NULL && sb_runid == NULL) return 0;
@@ -4954,6 +5360,8 @@ sentinelRedisInstance *sentinelSelectSlave(sentinelRedisInstance *master) {
     mstime_t max_master_down_time = 0;
 
     if (master->flags & SRI_S_DOWN)
+        // 从主观下线时间开始计算
+        // master下线的最长时间
         max_master_down_time += mstime() - master->s_down_since_time;
     max_master_down_time += master->down_after_period * 10;
 
@@ -4963,19 +5371,27 @@ sentinelRedisInstance *sentinelSelectSlave(sentinelRedisInstance *master) {
         sentinelRedisInstance *slave = dictGetVal(de);
         mstime_t info_validity_time;
 
+        // salve处于下线状态
         if (slave->flags & (SRI_S_DOWN|SRI_O_DOWN)) continue;
+        // salve 已经失联
         if (slave->link->disconnected) continue;
+        // 没有回复ping消息
         if (mstime() - slave->link->last_avail_time > sentinel_ping_period*5) continue;
+        // 设置的提升为主的权限为0 
         if (slave->slave_priority == 0) continue;
 
         /* If the master is in SDOWN state we get INFO for slaves every second.
          * Otherwise we get it with the usual period so we need to account for
          * a larger delay. */
+        // 当master处于主观下线状态，可能接收不到salve的ping回复
+        // 所以我们需要接收pong的更大延迟时间
         if (master->flags & SRI_S_DOWN)
             info_validity_time = sentinel_ping_period*5;
         else
             info_validity_time = sentinel_info_period*3;
+        // salve 接收到info的消息距离现在的时间过长
         if (mstime() - slave->info_refresh > info_validity_time) continue;
+        // salve和master失去通信的时间>master的下线时间，则证明salve早已经下线
         if (slave->master_link_down_time > max_master_down_time) continue;
         instance[instances++] = slave;
     }
@@ -4983,9 +5399,10 @@ sentinelRedisInstance *sentinelSelectSlave(sentinelRedisInstance *master) {
     if (instances) {
         qsort(instance,instances,sizeof(sentinelRedisInstance*),
             compareSlavesForPromotion);
-        selected = instance[0];
+        // 排在第一位的就是就是选举出的合适的slave
+        selected = instance[0]; 
     }
-    zfree(instance);
+    zfree(instance);  
     return selected;
 }
 
@@ -4995,13 +5412,16 @@ void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
     int isleader;
 
     /* Check if we are the leader for the failover epoch. */
+    // 检测负责转移的sentinel是否是选举出的leader
     leader = sentinelGetLeader(ri, ri->failover_epoch);
+    // 检测选举的leader和当前的sentinel是否相等
     isleader = leader && strcasecmp(leader,sentinel.myid) == 0;
     sdsfree(leader);
 
     /* If I'm not the leader, and it is not a forced failover via
      * SENTINEL FAILOVER, then I can't continue with the failover. */
     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
+        // 如果没有选举出leader，放弃故障转移
         mstime_t election_timeout = sentinel_election_timeout;
 
         /* The election timeout is the MIN between SENTINEL_ELECTION_TIMEOUT
@@ -5015,28 +5435,34 @@ void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
         }
         return;
     }
+    // 记录选举出lead二日志
     sentinelEvent(LL_WARNING,"+elected-leader",ri,"%@");
     if (sentinel.simfailure_flags & SENTINEL_SIMFAILURE_CRASH_AFTER_ELECTION)
         sentinelSimFailureCrash();
+    // 更新故障转移状态为sentinel_failover_start_select_salve (选择合适的salve称为master)
     ri->failover_state = SENTINEL_FAILOVER_STATE_SELECT_SLAVE;
+    // 更改故障转移状态改变的时间
     ri->failover_state_change_time = mstime();
+    // 记录故障转移开始选择salve成为master的日志，并发event到+failover-state-select-slave频道
     sentinelEvent(LL_WARNING,"+failover-state-select-slave",ri,"%@");
 }
 
+// 故障转移选出合适的salve
 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
 
     /* We don't handle the timeout in this state as the function aborts
      * the failover or go forward in the next state. */
     if (slave == NULL) {
+        // 没有选出合适slave，故障转移失败
         sentinelEvent(LL_WARNING,"-failover-abort-no-good-slave",ri,"%@");
         sentinelAbortFailover(ri);
     } else {
         sentinelEvent(LL_WARNING,"+selected-slave",slave,"%@");
-        slave->flags |= SRI_PROMOTED;
-        ri->promoted_slave = slave;
-        ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE;
-        ri->failover_state_change_time = mstime();
+        slave->flags |= SRI_PROMOTED; // salve等待升级为master
+        ri->promoted_slave = slave; // 选举出的sentinel记录选择的合适的salve作为master
+        ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE; // 故障转移状态转变为salve发送slaveof no one 状态
+        ri->failover_state_change_time = mstime(); // 记录更新配置的时间
         sentinelEvent(LL_NOTICE,"+failover-state-send-slaveof-noone",
             slave, "%@");
     }
@@ -5048,6 +5474,8 @@ void sentinelFailoverSendSlaveOfNoOne(sentinelRedisInstance *ri) {
     /* We can't send the command to the promoted slave if it is now
      * disconnected. Retry again and again with this state until the timeout
      * is reached, then abort the failover. */
+
+    // salve 失联，故障转移失败不能发送
     if (ri->promoted_slave->link->disconnected) {
         if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
             sentinelEvent(LL_WARNING,"-failover-abort-slave-timeout",ri,"%@");
@@ -5060,8 +5488,10 @@ void sentinelFailoverSendSlaveOfNoOne(sentinelRedisInstance *ri) {
      * We actually register a generic callback for this command as we don't
      * really care about the reply. We check if it worked indirectly observing
      * if INFO returns a different role (master instead of slave). */
+    // 选择出将要被提升为matser的salve的断开和原来master的连接
     retval = sentinelSendSlaveOf(ri->promoted_slave,NULL);
     if (retval != C_OK) return;
+    // 故障转移状态更改为salve等待升级为master
     sentinelEvent(LL_NOTICE, "+failover-state-wait-promotion",
         ri->promoted_slave,"%@");
     ri->failover_state = SENTINEL_FAILOVER_STATE_WAIT_PROMOTION;
@@ -5070,9 +5500,15 @@ void sentinelFailoverSendSlaveOfNoOne(sentinelRedisInstance *ri) {
 
 /* We actually wait for promotion indirectly checking with INFO when the
  * slave turns into a master. */
+
+// 当slave转变为master时，我们实际上是在等待晋升，间接地检查信息。
 void sentinelFailoverWaitPromotion(sentinelRedisInstance *ri) {
     /* Just handle the timeout. Switching to the next state is handled
      * by the function parsing the INFO command of the promoted slave. */
+   
+    // salve被设置为（SENTINEL_FAILOVER_STATE_WAIT_PROMOTION）
+    // 等待升级的时间超过允许的故障转移的超时时间
+    // 故障转移失败
     if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
         sentinelEvent(LL_WARNING,"-failover-abort-slave-timeout",ri,"%@");
         sentinelAbortFailover(ri);
@@ -5087,11 +5523,18 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
 
     /* We can't consider failover finished if the promoted slave is
      * not reachable. */
+
+    // 如果需要升级的slave不可达，则不能考虑故障转移
     if (master->promoted_slave == NULL ||
         master->promoted_slave->flags & SRI_S_DOWN) return;
 
     /* The failover terminates once all the reachable slaves are properly
      * configured. */
+    /*
+    一旦正确配置了所有可访问的从属设备，故障切换就会终止。
+    */
+
+   // 计算没有加载master的新配置的slave数量
     di = dictGetIterator(master->slaves);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *slave = dictGetVal(de);
@@ -5103,6 +5546,7 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
     dictReleaseIterator(di);
 
     /* Force end of failover on timeout. */
+    // 在故障切换允许的超时范围内没有更近一部转移
     if (elapsed > master->failover_timeout) {
         not_reconfigured = 0;
         timeout = 1;
@@ -5110,6 +5554,7 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
     }
 
     if (not_reconfigured == 0) {
+        // salves全部配置完成，故障转移完毕
         sentinelEvent(LL_WARNING,"+failover-end",master,"%@");
         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
         master->failover_state_change_time = mstime();
@@ -5122,6 +5567,7 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
         dictIterator *di;
         dictEntry *de;
 
+        // 如果有超时的或者失败的，继续对new master发送，直到所有的连接上
         di = dictGetIterator(master->slaves);
         while((de = dictNext(di)) != NULL) {
             sentinelRedisInstance *slave = dictGetVal(de);
@@ -5142,6 +5588,10 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
 
 /* Send SLAVE OF <new master address> to all the remaining slaves that
  * still don't appear to have the configuration updated. */
+
+/*
+所有剩余salve向新的master 发送 slaveif <new master address> 来成为新的主的从
+*/
 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
     dictIterator *di;
     dictEntry *de;
@@ -5150,9 +5600,8 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
     di = dictGetIterator(master->slaves);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *slave = dictGetVal(de);
-
         if (slave->flags & (SRI_RECONF_SENT|SRI_RECONF_INPROG))
-            in_progress++;
+            in_progress++; // salve 已经向master发送salve of的个数
     }
     dictReleaseIterator(di);
 
@@ -5164,12 +5613,18 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
         int retval;
 
         /* Skip the promoted slave, and already configured slaves. */
+        // 放弃(salve 已经处于升级，或者已经发送完毕)
         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
 
         /* If too much time elapsed without the slave moving forward to
          * the next state, consider it reconfigured even if it is not.
          * Sentinels will detect the slave as misconfigured and fix its
          * configuration later. */
+
+        /*
+        如果过多的时间流逝而没有slave向前移动到下一个状态，则考虑它重新配置。
+        哨兵将检测到从机配置错误，并在稍后修复其配置。
+        */
         if ((slave->flags & SRI_RECONF_SENT) &&
             (mstime() - slave->slave_reconf_sent_time) >
             sentinel_slave_reconf_timeout)
@@ -5181,21 +5636,25 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
 
         /* Nothing to do for instances that are disconnected or already
          * in RECONF_SENT state. */
+        // 忽略下线的和处于RECONF_SENT状态的slave
         if (slave->flags & (SRI_RECONF_SENT|SRI_RECONF_INPROG)) continue;
         if (slave->link->disconnected) continue;
 
         /* Send SLAVEOF <new master>. */
         retval = sentinelSendSlaveOf(slave,master->promoted_slave->addr);
         if (retval == C_OK) {
+            // 发送成功 salve状态转变为SRI_RECONF_SENT
             slave->flags |= SRI_RECONF_SENT;
             slave->slave_reconf_sent_time = mstime();
             sentinelEvent(LL_NOTICE,"+slave-reconf-sent",slave,"%@");
+            // 已经建立连接的数目++
             in_progress++;
         }
     }
     dictReleaseIterator(di);
 
     /* Check if all the slaves are reconfigured and handle timeout. */
+    /*检查是否所有salves都已重新配置并处理超时。*/
     sentinelFailoverDetectEnd(master);
 }
 
@@ -5220,18 +5679,24 @@ void sentinelFailoverStateMachine(sentinelRedisInstance *ri) {
 
     switch(ri->failover_state) {
         case SENTINEL_FAILOVER_STATE_WAIT_START:
+           // 等待故障转移开始
             sentinelFailoverWaitStart(ri);
             break;
         case SENTINEL_FAILOVER_STATE_SELECT_SLAVE:
+            // 选出合适从节点
             sentinelFailoverSelectSlave(ri);
             break;
         case SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE:
+            // 选择的slave发送 slaveof no one
+            // 断开和原来的master的连接
             sentinelFailoverSendSlaveOfNoOne(ri);
             break;
         case SENTINEL_FAILOVER_STATE_WAIT_PROMOTION:
+            // 等待选出的从节点的升级为主
             sentinelFailoverWaitPromotion(ri);
             break;
         case SENTINEL_FAILOVER_STATE_RECONF_SLAVES:
+            // 向其余从节点发送命令，使其成为新master的从节点
             sentinelFailoverReconfNextSlave(ri);
             break;
     }
@@ -5286,17 +5751,25 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     }
 
     /* Only masters */
+    // 当只有master
     if (ri->flags & SRI_MASTER) {
+        // 设置master是否处于客观下线
         sentinelCheckObjectivelyDown(ri);
+        // 检测是否发起故障转移
         if (sentinelStartFailoverIfNeeded(ri))
+            // 如果需要故障转移，此sentinel节点发起节点选举，选举出leader，
+            // 此leader节点负责,根据优先级把salve节点提升为master节点
             sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);
+        // 在主备之间进行故障转移, 选出新的master，并把salve连接到新的master
         sentinelFailoverStateMachine(ri);
+        // 把选举出的新master转态更新到其他的sentinel节点
         sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_NO_FLAGS);
     }
 }
 
 /* Perform scheduled operations for all the instances in the dictionary.
  * Recursively call the function against dictionaries of slaves. */
+// 传入的是masterhash，
 void sentinelHandleDictOfRedisInstances(dict *instances) {
     dictIterator *di;
     dictEntry *de;
@@ -5306,17 +5779,22 @@ void sentinelHandleDictOfRedisInstances(dict *instances) {
     di = dictGetIterator(instances);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
-
+        // 不断调度检测每一个redis实例
         sentinelHandleRedisInstance(ri);
         if (ri->flags & SRI_MASTER) {
+            //如果ri为主节点，递归调用master持有的salves(从)
+            // 递归调用监控master的sentinel节点
             sentinelHandleDictOfRedisInstances(ri->slaves);
             sentinelHandleDictOfRedisInstances(ri->sentinels);
+            // 如果ri节点处于故障转移中更新配置的状态
+            // 也就是此master的salve需要被升级为master
             if (ri->failover_state == SENTINEL_FAILOVER_STATE_UPDATE_CONFIG) {
                 switch_to_promoted = ri;
             }
         }
     }
     if (switch_to_promoted)
+        // 故障转移成功，发送主节点切换的消息
         sentinelFailoverSwitchToPromotedSlave(switch_to_promoted);
     dictReleaseIterator(di);
 }
@@ -5365,5 +5843,9 @@ void sentinelTimer(void) {
      * exactly continue to stay synchronized asking to be voted at the
      * same time again and again (resulting in nobody likely winning the
      * election because of split brain voting). */
+
+    // 我们不断地改变Redis“定时器中断”的频率，以便使每个sentinel与其他sentinel不同步。
+    // 这种非决定论避免了在同一时间开始的哨兵继续保持同步，
+    // 一次又一次地要求在同一时间投票（导致导致因为脑裂不能赢得选举）。
     server.hz = CONFIG_DEFAULT_HZ + rand() % CONFIG_DEFAULT_HZ;
 }

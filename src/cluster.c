@@ -1005,11 +1005,10 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     return 1;
 }
 
-/* Remove failure reports that are too old, where too old means reasonably
- * older than the global node timeout. Note that anyway for a node to be
- * flagged as FAIL we need to have a local PFAIL state that is at least
- * older than the global node timeout, so we don't just trust the number
- * of failure reports from other nodes. */
+/*
+删除太旧的故障报告，其中太旧意味着比全局节点超时时间早得多。请注意，无论如何，对于要标记为失败的节点，
+我们需要具有至少早于全局节点超时的本地PFAIL状态，因此我们不只是信任来自其他节点的故障报告的数量。
+*/
 void clusterNodeCleanupFailureReports(clusterNode *node) {
     list *l = node->fail_reports;
     listNode *ln;
@@ -1022,28 +1021,24 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
     listRewind(l,&li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
+        // 失败节点的离线时间过长，从报告列表中移除
         if (now - fr->time > maxtime) listDelNode(l,ln);
     }
 }
 
-/* Remove the failing report for 'node' if it was previously considered
- * failing by 'sender'. This function is called when a node informs us via
- * gossip that a node is OK from its point of view (no FAIL or PFAIL flags).
- *
- * Note that this function is called relatively often as it gets called even
- * when there are no nodes failing, and is O(N), however when the cluster is
- * fine the failure reports list is empty so the function runs in constant
- * time.
- *
- * The function returns 1 if the failure report was found and removed.
- * Otherwise 0 is returned. */
+// 当"sender"以前认为"node"处于不可连接状态，则更改"node"的失败状态。
+// 当一个节点通过gosiip消息通知我们其处于正常状态时，我们调用此删除失败状态的函数。
+
+// 请注意此函数的调用频率比较高，因为即使在没有节点发生故障的情况下也会被调用，并且为O(n)
+// 但是当集群状况良好时，故障报告列表为空，因此函数以恒定时间运行。
+// *如果找到并删除了故障报告，则函数返回1。否则返回0。
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     list *l = node->fail_reports;
     listNode *ln;
     listIter li;
     clusterNodeFailReport *fr;
 
-    /* Search for a failure report from this sender. */
+    // 查找senter中发生故障记录的点
     listRewind(l,&li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
@@ -1051,7 +1046,7 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     }
     if (!ln) return 0; /* No failure report from this sender. */
 
-    /* Remove the failure report. */
+    // 在故障列表中清除发生故障的节点
     listDelNode(l,ln);
     clusterNodeCleanupFailureReports(node);
     return 1;
@@ -1183,7 +1178,11 @@ void clusterDelNode(clusterNode *delnode) {
 }
 
 /* Node lookup by name */
+/*
+根据节点id，在节点列表中查询发送的节点 
+*/
 clusterNode *clusterLookupNode(const char *name) {
+    
     sds s = sdsnewlen(name, CLUSTER_NAMELEN);
     dictEntry *de;
 
@@ -1596,13 +1595,16 @@ int clusterStartHandshake(char *ip, int port, int cport) {
     return 1;
 }
 
-/* Process the gossip section of PING or PONG packets.
- * Note that this function assumes that the packet is already sanity-checked
- * by the caller, not in the content of the gossip section, but in the
- * length. */
+/*
+处理ping或者pong消息的gossip部分。
+注意调用者已经检查了数据的完整性，但是没有检测gossip部分，只是检测全部的数据长度。
+*/
 void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
+    // gossip的entry的数目
     uint16_t count = ntohs(hdr->count);
+    // 获取节点消息中的gossip数组
     clusterMsgDataGossip *g = (clusterMsgDataGossip*) hdr->data.ping.gossip;
+    // 获取发送者
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender);
 
     while(count--) {
@@ -1610,6 +1612,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         clusterNode *node;
         sds ci;
 
+        // 日志的类型为debug类型，需要打印日志
         if (server.verbosity == LL_DEBUG) {
             ci = representClusterNodeFlags(sdsempty(), flags);
             serverLog(LL_DEBUG,"GOSSIP %.40s %s:%d@%d %s",
@@ -1621,20 +1624,24 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             sdsfree(ci);
         }
 
-        /* Update our state accordingly to the gossip sections */
+        // 根据gossip部分更新我们的状态
+
+        // 根据gossip部分的节点id获取对应的节点
         node = clusterLookupNode(g->nodename);
         if (node) {
-            /* We already know this node.
-               Handle failure reports, only when the sender is a master. */
+            // 节点不是自身，并且发送方是主节点，才处理节点的故障报告
             if (sender && nodeIsMaster(sender) && node != myself) {
+                // 当节点状态为FAIL或者PFAIL时
                 if (flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
                             "Node %.40s reported node %.40s as not reachable.",
                             sender->name, node->name);
                     }
+                    // 标记节点状态为fail
                     markNodeAsFailingIfNeeded(node);
                 } else {
+                    // 是活跃状态，移除故障报告
                     if (clusterNodeDelFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
                             "Node %.40s reported node %.40s is back online.",
@@ -1643,33 +1650,28 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 }
             }
 
-            /* If from our POV the node is up (no failure flags are set),
-             * we have no pending ping for the node, nor we have failure
-             * reports for this node, update the last pong time with the
-             * one we see from the other nodes. */
+            /*
+            如果节点未设置故障标志，我们没有针对该节点的挂起ping，也没有针对该节点的故障报告，
+            请使用我们从其他节点看到的时间更新最后一次pong时间。
+            */
             if (!(flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) &&
                 node->ping_sent == 0 &&
                 clusterNodeFailureReportsCount(node) == 0)
             {
+                // 从其他节点获取接收pong的最后的时间
                 mstime_t pongtime = ntohl(g->pong_received);
                 pongtime *= 1000; /* Convert back to milliseconds. */
 
-                /* Replace the pong time with the received one only if
-                 * it's greater than our view but is not in the future
-                 * (with 500 milliseconds tolerance) from the POV of our
-                 * clock. */
+                // 接收到pong的时间>节点接收到pong的时间，但又不超过全局时间(server.mstime+500) 允许误差时间为500ms。
                 if (pongtime <= (server.mstime+500) &&
                     pongtime > node->pong_received)
                 {
                     node->pong_received = pongtime;
                 }
             }
-
-            /* If we already know this node, but it is not reachable, and
-             * we see a different address in the gossip section of a node that
-             * can talk with this other node, update the address, disconnect
-             * the old link if any, so that we'll attempt to connect with the
-             * new address. */
+            /*
+            节点为故障状态节点 && 在消息gossip部分为新的地址 && gosiip部分传递的状态为活跃 && 地址发生改变
+            */
             if (node->flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL) &&
                 !(flags & CLUSTER_NODE_NOADDR) &&
                 !(flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) &&
@@ -1677,6 +1679,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  node->port != ntohs(g->port) ||
                  node->cport != ntohs(g->cport)))
             {
+                // 需要释放节点的故障状态，释放连接
+                // 更新新的地址
                 if (node->link) freeClusterLink(node->link);
                 memcpy(node->ip,g->ip,NET_IP_STR_LEN);
                 node->port = ntohs(g->port);
@@ -1685,15 +1689,12 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 node->flags &= ~CLUSTER_NODE_NOADDR;
             }
         } else {
-            /* If it's not in NOADDR state and we don't have it, we
-             * add it to our trusted dict with exact nodeid and flag.
-             * Note that we cannot simply start a handshake against
-             * this IP/PORT pairs, since IP/PORT can be reused already,
-             * otherwise we risk joining another cluster.
-             *
-             * Note that we require that the sender of this gossip message
-             * is a well known node in our cluster, otherwise we risk
-             * joining another cluster. */
+            /*
+            不在NODE_NOADDR状态，并且此节点不在进群列表中。我们就创建一个节点把他添加到server的列表中。
+            但是不能简单的针对此节点ip和端口发起握手(因为ip端口已经可以重用)。
+
+            我们要求这个node的sender是我们集群中的一个已知节点，否则就有添加到另一个集群的风险。
+            */
             if (sender &&
                 !(flags & CLUSTER_NODE_NOADDR) &&
                 !clusterBlacklistExists(g->nodename))
@@ -1707,8 +1708,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 clusterAddNode(node);
             }
         }
-
-        /* Next node */
+        // 获取下一个gosiip部分的节点
         g++;
     }
 }
@@ -2012,38 +2012,35 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     clusterNode *sender;
     if (link->node && !nodeInHandshake(link->node)) {
-        /* If the link has an associated node, use that so that we don't have to look it
-         * up every time, except when the node is still in handshake, the node still has
-         * a random name thus not truly "known". */
+        /*连接有一个节点，并且节点没有在处理ping消息中，可以直接返回使用*/
         sender = link->node;
     } else {
-        /* Otherwise, fetch sender based on the message */
+        // 根据消息持有的nodeID查找
         sender = clusterLookupNode(hdr->sender);
-        /* We know the sender node but haven't associate it with the link. This must
-         * be an inbound link because only for inbound links we didn't know which node
-         * to associate when they were created. */
+        /*我们知道发送方节点，但尚未将其与link关联。
+        这必须是入站链接，因为只有入站链接在创建时我们不知道要关联哪个节点*/
         if (sender && !link->node) {
+            // sender和link绑定
             setClusterNodeToInboundClusterLink(sender, link);
         }
     }
     return sender;
 }
 
-/* When this function is called, there is a packet to process starting
- * at link->rcvbuf. Releasing the buffer is up to the caller, so this
- * function should just handle the higher level stuff of processing the
- * packet, modifying the cluster state if needed.
- *
- * The function returns 1 if the link is still valid after the packet
- * was processed, otherwise 0 if the link was freed since the packet
- * processing lead to some inconsistency error (for instance a PONG
- * received from the wrong sender ID). */
+
+/*调用此函数时，将从link->rcvbuf开始处理一个数据包。
+释放缓冲区取决于调用者，所以这个函数应该只处理处理更高级别的数据包处理，如果需要的话修改集群状态。
+*
+*如果在处理数据包后链路仍然有效，则函数返回1；
+否则，如果由于数据包处理导致某些不一致错误（例如，从错误的发送方ID接收到的PONG）而释放了链路，则函数返回0*/
+
 int clusterProcessPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
 
+    // 如果是MSG消息类型，获取对应的数据类型
     if (type < CLUSTERMSG_TYPE_COUNT)
         server.cluster->stats_bus_messages_received[type]++;
     serverLog(LL_DEBUG,"--- Processing packet of type %s, %lu bytes",
@@ -2054,11 +2051,12 @@ int clusterProcessPacket(clusterLink *link) {
     if (totlen > link->rcvbuf_len) return 1;
 
     if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
-        /* Can't handle messages of different versions. */
+        /*不能处理不同版本的协议数据*/
         return 1;
     }
 
     if (type == server.cluster_drop_packet_filter) {
+        // 需要协议放弃的消息类型
         serverLog(LL_WARNING, "Dropping packet that matches debug drop filter");
         return 1;
     }
@@ -2072,16 +2070,19 @@ int clusterProcessPacket(clusterLink *link) {
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG ||
         type == CLUSTERMSG_TYPE_MEET)
     {
+        // PING、PONG、MEET类型消息
         uint16_t count = ntohs(hdr->count);
 
-        explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+        // 计算数据长度
+        explen = sizeof(clusterMsg)-sizeof(union clusterMsgData); 
         explen += (sizeof(clusterMsgDataGossip)*count);
 
-        /* If there is extension data, which doesn't have a fixed length,
-         * loop through them and validate the length of it now. */
+        // 如果存在没有固定长度的扩展数据，请循环使用它们并立即验证其长度。
         if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
             clusterMsgPingExt *ext = getInitialPingExt(hdr, count);
             while (extensions--) {
+                // 计算数据长度，必须满足是8的倍数。
+                // least signature, version, totlen, count.
                 uint16_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)", 
@@ -2130,31 +2131,38 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     } 
 
+    // 获取发送消息的节点
     sender = getNodeFromLinkAndMsg(link, hdr);
 
-    /* Update the last time we saw any data from this node. We
-     * use this in order to avoid detecting a timeout from a node that
-     * is just sending a lot of data in the cluster bus, for instance
-     * because of Pub/Sub. */
+    /*
+    更新sender最后的接收到数据的时间。 我们使用它是为了避免从一个节点检测到超时，
+    该节点只是在集群总线中发送大量数据，例如因为发布/订阅。
+    */
     if (sender) sender->data_received = now;
 
+    // sender已经处理完消息
     if (sender && !nodeInHandshake(sender)) {
-        /* Update our currentEpoch if we see a newer epoch in the cluster. */
+        /* 在集群中看到较新的纪元更新自己的纪元 */
         senderCurrentEpoch = ntohu64(hdr->currentEpoch);
         senderConfigEpoch = ntohu64(hdr->configEpoch);
         if (senderCurrentEpoch > server.cluster->currentEpoch)
+            // 更新集群集群节点的配置纪元
             server.cluster->currentEpoch = senderCurrentEpoch;
-        /* Update the sender configEpoch if it is publishing a newer one. */
+
+        /*如果发送方正在发布较新，更新configEpoch*/
         if (senderConfigEpoch > sender->configEpoch) {
             sender->configEpoch = senderConfigEpoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                                  CLUSTER_TODO_FSYNC_CONFIG);
         }
-        /* Update the replication offset info for this node. */
+
+        // 更新此节点的复制偏移量信息
         sender->repl_offset = ntohu64(hdr->offset);
         sender->repl_offset_time = now;
-        /* If we are a slave performing a manual failover and our master
-         * sent its offset while already paused, populate the MF state. */
+
+        /*
+        如果我们是执行手动故障切换的从机，而我们的主机在已暂停时发送其偏移量，更新MF状态。 
+        */
         if (server.cluster->mf_end &&
             nodeIsSlave(myself) &&
             myself->slaveof == sender &&
@@ -2170,22 +2178,20 @@ int clusterProcessPacket(clusterLink *link) {
         }
     }
 
-    /* Initial processing of PING and MEET requests replying with a PONG. */
+    /*PING和MEET请求的初始处理使用PONG进行回复。*/
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_MEET) {
-        /* We use incoming MEET messages in order to set the address
-         * for 'myself', since only other cluster nodes will send us
-         * MEET messages on handshakes, when the cluster joins, or
-         * later if we changed address, and those nodes will use our
-         * official address to connect to us. So by obtaining this address
-         * from the socket is a simple way to discover / update our own
-         * address in the cluster without it being hardcoded in the config.
-         *
-         * However if we don't have an address at all, we update the address
-         * even with a normal PING packet. If it's wrong it will be fixed
-         * by MEET later. */
+        /*
+        我们使用传入的MEET消息来设置"myself"地址，因为只有其他集群节点在加入时会向我们MEET消息。
+        当集群节点加入，或者我们更改了地址，这些节点会使用我们公开的地址与我们连接。所以从套接字这里发现自己的地址是一个简单的方法，
+        而无需要在配置中硬编码。
+
+        然而，如果我们根本没有地址，即使使用正常的PING数据包，我们也会更新地址。
+        如果是错误的，将在稍后的MEET信息中解决
+        */
         if ((type == CLUSTERMSG_TYPE_MEET || myself->ip[0] == '\0') &&
             server.cluster_announce_ip == NULL)
         {
+            // 从socket中获取地址，并更新"mysel"地址
             char ip[NET_IP_STR_LEN];
 
             if (connSockName(link->conn,ip,sizeof(ip),NULL) != -1 &&
@@ -2198,29 +2204,31 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
 
-        /* Add this node if it is new for us and the msg type is MEET.
-         * In this stage we don't try to add the node with the right
-         * flags, slaveof pointer, and so forth, as this details will be
-         * resolved when we'll receive PONGs from the node. */
+        // 如果对我们来说是新的消息，并且类型为MEET则添加此节点
+        // 在这个阶段不会添加任何正确的flag标志，slaveof 指针等
+        // 当我们接受到PONG消息时，这些都会被设置
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
 
+            // 创建节点并设置状态为HANDSHAK，进行节点握手
             node = createClusterNode(NULL,CLUSTER_NODE_HANDSHAKE);
             nodeIp2String(node->ip,link,hdr->myip);
+            // 设置节点的端口是消息对应的端口
             node->port = ntohs(hdr->port);
             node->pport = ntohs(hdr->pport);
             node->cport = ntohs(hdr->cport);
+            // 添加新的节点到本地nodes表
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
 
-        /* If this is a MEET packet from an unknown node, we still process
-         * the gossip section here since we have to trust the sender because
-         * of the message type. */
+        /*
+         如果是来自未知类型的数据包，我们仍然梳理gossip部分。因为在此消息类型中，我们必须信任发送者。
+        */
         if (!sender && type == CLUSTERMSG_TYPE_MEET)
             clusterProcessGossipSection(hdr,link);
 
-        /* Anyway reply with a PONG */
+        // 对ping和meet消息回复pong
         clusterSendPing(link,CLUSTERMSG_TYPE_PONG);
     }
 
@@ -2592,14 +2600,16 @@ void clusterWriteHandler(connection *conn) {
         connSetWriteHandler(link->conn, NULL);
 }
 
-/* A connect handler that gets called when a connection to another node
- * gets established.
- */
+/*
+连接到另一个节点建立连接时的处理程序
+*/
 void clusterLinkConnectHandler(connection *conn) {
-    clusterLink *link = connGetPrivateData(conn);
-    clusterNode *node = link->node;
+    clusterLink *link = connGetPrivateData(conn); // 获取节点彼此之间通信的连接
+    clusterNode *node = link->node; // 节点表
 
-    /* Check if connection succeeded */
+    /*
+    检测连接是否处于连接状态
+    */
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_VERBOSE, "Connection with Node %.40s at %s:%d failed: %s",
                 node->name, node->ip, node->cport,
@@ -2608,38 +2618,39 @@ void clusterLinkConnectHandler(connection *conn) {
         return;
     }
 
-    /* Register a read handler from now on */
+    /*注册读取连接消息的方法*/
     connSetReadHandler(conn, clusterReadHandler);
 
-    /* Queue a PING in the new connection ASAP: this is crucial
-     * to avoid false positives in failure detection.
-     *
-     * If the node is flagged as MEET, we send a MEET message instead
-     * of a PING one, to force the receiver to add us in its node
-     * table. */
+    /*
+    尽快在新连接中排队PING：这对于避免故障检测中出现误报至关重要。
+    *
+    *如果节点被标记为MEET，
+    我们将发送一条MEET消息而不是PING消息，以迫使接收方将我们添加到其节点表中。
+    */
     mstime_t old_ping_sent = node->ping_sent;
     clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ?
             CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
     if (old_ping_sent) {
-        /* If there was an active ping before the link was
-         * disconnected, we want to restore the ping time, otherwise
-         * replaced by the clusterSendPing() call. */
+        /*如果在链接断开之前有一个活动的ping，我们希望恢复ping时间，
+        否则将被clusterSendPing（）调用替换。*/
         node->ping_sent = old_ping_sent;
     }
-    /* We can clear the flag after the first packet is sent.
-     * If we'll never receive a PONG, we'll never send new packets
-     * to this node. Instead after the PONG is received and we
-     * are no longer in meet/handshake status, we want to send
-     * normal PING packets. */
+
+    /*
+    我们可以在发送第一个数据包后清除标志。
+    *如果我们永远不会收到PONG，我们就永远不会向这个节点发送新的数据包。
+    相反，在收到pong并且我们不再处于会面/握手状态后，我们希望发送正常的ping据包。 */
     node->flags &= ~CLUSTER_NODE_MEET;
 
     serverLog(LL_DEBUG,"Connecting with Node %.40s at %s:%d",
             node->name, node->ip, node->cport);
 }
 
-/* Read data. Try to read the first field of the header first to check the
- * full length of the packet. When a whole packet is in memory this function
- * will call the function to process the packet. And so forth. */
+/*
+读取数据。首先尝试读取报头的第一个字段，以检查数据包的完整长度。
+当整个数据包在内存中时，此函数将调用函数来处理数据包。
+*/
+
 void clusterReadHandler(connection *conn) {
     clusterMsg buf[1];
     ssize_t nread;
@@ -2647,18 +2658,21 @@ void clusterReadHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
 
-    while(1) { /* Read as long as there is data to read. */
+    while(1) { 
+        /*读取数据，只要有数据就读取*/
+
+        // 获取能够读取的数据缓冲区长度
         rcvbuflen = link->rcvbuf_len;
         if (rcvbuflen < 8) {
-            /* First, obtain the first 8 bytes to get the full message
-             * length. */
+            /*首先，获取能够读取的数据长度。当接收缓冲区小于8字节，可以直接获取*/
             readlen = 8 - rcvbuflen;
         } else {
-            /* Finally read the full message. */
+            /*获取完整的消息*/
             hdr = (clusterMsg*) link->rcvbuf;
             if (rcvbuflen == 8) {
-                /* Perform some sanity check on the message signature
-                 * and length. */
+                // 对消息签名和长度执行一些合理性检查。
+                // 消息头部不是"RCmb"标识，并且数据长度小于允许的最小数据长度
+                // 返回数据i/O错误
                 if (memcmp(hdr->sig,"RCmb",4) != 0 ||
                     ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN)
                 {
@@ -2674,6 +2688,7 @@ void clusterReadHandler(connection *conn) {
         }
 
         nread = connRead(conn,buf,readlen);
+        // 当nread<0,并且conn处于连接状态，没有更多数据可以读
         if (nread == -1 && (connGetState(conn) == CONN_STATE_CONNECTED)) return; /* No more data ready. */
 
         if (nread <= 0) {
@@ -2684,13 +2699,17 @@ void clusterReadHandler(connection *conn) {
             return;
         } else {
             /* Read data and recast the pointer to the new buffer. */
+            /*读取数据并把指针指向新的缓冲区*/
             size_t unused = link->rcvbuf_alloc - link->rcvbuf_len;
             if ((size_t)nread > unused) {
+                // 当缓冲区内容不足时需要开辟空间
                 size_t required = link->rcvbuf_len + nread;
                 /* If less than 1mb, grow to twice the needed size, if larger grow by 1mb. */
+                // 小于1mb，2倍递增。大于1mb，分配1mb。
                 link->rcvbuf_alloc = required < RCVBUF_MAX_PREALLOC ? required * 2: required + RCVBUF_MAX_PREALLOC;
                 link->rcvbuf = zrealloc(link->rcvbuf, link->rcvbuf_alloc);
             }
+            // 把数据读取到新的缓冲区
             memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
             link->rcvbuf_len += nread;
             hdr = (clusterMsg*) link->rcvbuf;
@@ -2698,6 +2717,7 @@ void clusterReadHandler(connection *conn) {
         }
 
         /* Total length obtained? Process this packet. */
+        // 继续读取忽略的消息
         if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
@@ -2717,6 +2737,10 @@ void clusterReadHandler(connection *conn) {
  * It is guaranteed that this function will never have as a side effect
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. */
+
+/*
+把内容放进link的发送缓冲区,稍后事件处理程序调用link进行发送
+*/
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
@@ -2830,9 +2854,15 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
 /* Return non zero if the node is already present in the gossip section of the
  * message pointed by 'hdr' and having 'count' gossip entries. Otherwise
  * zero is returned. Helper for clusterSendPing(). */
+
+/*
+如果节点已经出现在消息的gossip部分（由“hdr”指向），并且有“count”个gossip消息，则返回非零,
+否则返回零。clusterSendPing（）的帮助程序。
+*/
 int clusterNodeIsInGossipSection(clusterMsg *hdr, int count, clusterNode *n) {
     int j;
     for (j = 0; j < count; j++) {
+        // 检测节点是已经在gossip消息中
         if (memcmp(hdr->data.ping.gossip[j].nodename,n->name,
                 CLUSTER_NAMELEN) == 0) break;
     }
@@ -2841,6 +2871,11 @@ int clusterNodeIsInGossipSection(clusterMsg *hdr, int count, clusterNode *n) {
 
 /* Set the i-th entry of the gossip section in the message pointed by 'hdr'
  * to the info of the specified node 'n'. */
+
+/*
+将“hdr”指向的消息中gossip部分的第i个消息实体设置为指定节点“n”的信息。
+生成一个gossip实例
+*/
 void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
     clusterMsgDataGossip *gossip;
     gossip = &(hdr->data.ping.gossip[i]);
@@ -2855,90 +2890,87 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
     gossip->notused1 = 0;
 }
 
-/* Send a PING or PONG packet to the specified node, making sure to add enough
- * gossip information. */
+/*
+gossip 分为ping、pong、meet、fail消息等类型
+*/
+/*
+向指定的节点发送ping或者pong消息，只需要添加足够的gossip消息
+*/
 void clusterSendPing(clusterLink *link, int type) {
     unsigned char *buf;
     clusterMsg *hdr;
-    int gossipcount = 0; /* Number of gossip sections added so far. */
-    int wanted; /* Number of gossip sections we want to append if possible. */
-    int estlen; /* Upper bound on estimated packet length */
-    /* freshnodes is the max number of nodes we can hope to append at all:
-     * nodes available minus two (ourself and the node we are sending the
-     * message to). However practically there may be less valid nodes since
-     * nodes in handshake state, disconnected, are not considered. */
+    // 到目前为止增加的gossip消息数量
+    int gossipcount = 0;
+    /*如果可能我们希望附加的gossip消息数量*/
+    int wanted; 
+    // 估计的数据包的长度
+    int estlen;
+    /*freshnodes是我们希望附加的最大节点数：
+    *节点可用减去2（我们自己和我们发送消息的节点）。
+    然而，实际上，由于不考虑处于握手状态、断开连接的节点，因此有效节点可能较少*/
     int freshnodes = dictSize(server.cluster->nodes)-2;
 
-    /* How many gossip sections we want to add? 1/10 of the number of nodes
-     * and anyway at least 3. Why 1/10?
-     *
-     * If we have N masters, with N/10 entries, and we consider that in
-     * node_timeout we exchange with each other node at least 4 packets
-     * (we ping in the worst case in node_timeout/2 time, and we also
-     * receive two pings from the host), we have a total of 8 packets
-     * in the node_timeout*2 failure reports validity time. So we have
-     * that, for a single PFAIL node, we can expect to receive the following
-     * number of failure reports (in the specified window of time):
-     *
-     * PROB * GOSSIP_ENTRIES_PER_PACKET * TOTAL_PACKETS:
-     *
-     * PROB = probability of being featured in a single gossip entry,
-     *        which is 1 / NUM_OF_NODES.
-     * ENTRIES = 10.
-     * TOTAL_PACKETS = 2 * 4 * NUM_OF_MASTERS.
-     *
-     * If we assume we have just masters (so num of nodes and num of masters
-     * is the same), with 1/10 we always get over the majority, and specifically
-     * 80% of the number of nodes, to account for many masters failing at the
-     * same time.
-     *
-     * Since we have non-voting slaves that lower the probability of an entry
-     * to feature our node, we set the number of entries per packet as
-     * 10% of the total nodes we have. */
+    /*
+    我们希望添加节点数的1/10个gossip消息，但是数目至少为3个。
+    为什么是1/10
+
+    如果我们有N个master，当gossip添加N/10个条消息，我们认为在一个node_timeout时间内需要彼此交换四个数据包。(最差是在node_time/2时间内发送ping消息，同时也需要接收ping消息)
+    所以在一个node_time*2的失败报告有效期内总共有8个数据包。因此，对于单个PFAIL节点，我们可以预期收到以下数量的故障报告（在指定的时间窗口内：
+    prob * GOSSIP_ENTRIES_PER_PACKET * TOTAL_PACKETS = prob * gossip每个包的内容*所有的数据包
+    prob = 出现在单个gossip节点中的概率，是1 / NUM_OF_NODES （1/节点数目)
+    ENTRIES = 10 （包数量为10）
+    TOTAL_PACKETS = 2 * 4 * NUM_OF_MASTERS. （所有包数目=2*4*master数目)
+
+    如果我们假设只有主节点（所以节点数和主节点数是一样的），那么1/10的情况下，我们总是超过大多数节点数，
+    特别是80%的节点数，来解释许多主节点同时失败的原因。
+
+    由于我们有无投票权的从属节点，这会降低节点出现条目的概率，因此我们将每个数据包的条目数设置为节点总数的10%。
+    */
     wanted = floor(dictSize(server.cluster->nodes)/10);
-    if (wanted < 3) wanted = 3;
+    if (wanted < 3) wanted = 3; // 希望的gossip不足三，设置为3
+    // 超过允许的gossip条目数目，设置为允许的最大条目
     if (wanted > freshnodes) wanted = freshnodes;
 
-    /* Include all the nodes in PFAIL state, so that failure reports are
-     * faster to propagate to go from PFAIL to FAIL state. */
+    /*包括所有处于PFAIL状态的节点，以便故障报告更快地从PFAIL传播到故障状态。*/
     int pfail_wanted = server.cluster->stats_pfail_nodes;
 
-    /* Compute the maximum estlen to allocate our buffer. We'll fix the estlen
-     * later according to the number of gossip sections we really were able
-     * to put inside the packet. */
+    /*计算分配缓冲区的最大estlen。我们稍后会根据我们真正能够放入包中的gossip部分的数量来设置estlen。*/
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip)*(wanted + pfail_wanted));
     estlen += sizeof(clusterMsgPingExt) + getHostnamePingExtSize();
 
-    /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
-     * sizeof(clusterMsg) or more. */
+    /*
+    注意：clusterBuildMessageHdr（）希望缓冲区始终至少为sizeof（clusterMsg）或更大
+    */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
     buf = zcalloc(estlen);
     hdr = (clusterMsg*) buf;
 
-    /* Populate the header. */
+    /*填充header消息*/
     if (!link->inbound && type == CLUSTERMSG_TYPE_PING)
         link->node->ping_sent = mstime();
     clusterBuildMessageHdr(hdr,type);
 
-    /* Populate the gossip fields */
-    int maxiterations = wanted*3;
+    /*填充gossip字段*/
+    int maxiterations = wanted*3; // 
+    
+    // 希望附加节点数>0 && 已经增加的gissip数量<期望的数量&&
     while(freshnodes > 0 && gossipcount < wanted && maxiterations--) {
         dictEntry *de = dictGetRandomKey(server.cluster->nodes);
         clusterNode *this = dictGetVal(de);
 
-        /* Don't include this node: the whole packet header is about us
-         * already, so we just gossip about other nodes. */
+        /*不要包括这个节点：整个header头已经是关于我们的了，所以我们gosiip内容只能设置为其他节点。*/
         if (this == myself) continue;
 
-        /* PFAIL nodes will be added later. */
+        /*处于PFAIL状态的节点稍后添加*/
         if (this->flags & CLUSTER_NODE_PFAIL) continue;
 
-        /* In the gossip section don't include:
-         * 1) Nodes in HANDSHAKE state.
-         * 3) Nodes with the NOADDR flag set.
-         * 4) Disconnected nodes if they don't have configured slots.
-         */
+        /*
+         如果是一下节点不发送gossip消息
+         1 处理ping消息中
+         2 不知道地址的节点
+         3 没有分配数据槽的断开的节点
+        */
         if (this->flags & (CLUSTER_NODE_HANDSHAKE|CLUSTER_NODE_NOADDR) ||
             (this->link == NULL && this->numslots == 0))
         {
@@ -2947,15 +2979,16 @@ void clusterSendPing(clusterLink *link, int type) {
         }
 
         /* Do not add a node we already have. */
+        /*忽略已经存在的节点*/
         if (clusterNodeIsInGossipSection(hdr,gossipcount,this)) continue;
 
         /* Add it */
         clusterSetGossipEntry(hdr,gossipcount,this);
-        freshnodes--;
-        gossipcount++;
+        freshnodes--; // 允许的最大节点--
+        gossipcount++; // 已经添加的gossip数目增加
     }
 
-    /* If there are PFAIL nodes, add them at the end. */
+    /*添加处于PFAIL状态的节点*/
     if (pfail_wanted) {
         dictIterator *di;
         dictEntry *de;
@@ -2963,8 +2996,11 @@ void clusterSendPing(clusterLink *link, int type) {
         di = dictGetSafeIterator(server.cluster->nodes);
         while((de = dictNext(di)) != NULL && pfail_wanted > 0) {
             clusterNode *node = dictGetVal(de);
+            // 处于ping交换状态舍弃
             if (node->flags & CLUSTER_NODE_HANDSHAKE) continue;
+            // 不知道地址，舍弃
             if (node->flags & CLUSTER_NODE_NOADDR) continue;
+            // 不处于失联状态舍弃
             if (!(node->flags & CLUSTER_NODE_PFAIL)) continue;
             clusterSetGossipEntry(hdr,gossipcount,node);
             freshnodes--;
@@ -2990,6 +3026,7 @@ void clusterSendPing(clusterLink *link, int type) {
     }
 
     /* Compute the actual total length and send! */
+    /*计算发送的总长度和gossip数目*/
     totlen += sizeof(clusterMsg)-sizeof(union clusterMsgData);
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
     hdr->count = htons(gossipcount);
@@ -4209,14 +4246,17 @@ void clusterDoBeforeSleep(int flags) {
 
 /* Test bit 'pos' in a generic bitmap. Return 1 if the bit is set,
  * otherwise 0. */
+
+/*在bitmap中检测位，如果已经被设置返回1，没有被设置返回0*/
 int bitmapTestBit(unsigned char *bitmap, int pos) {
-    off_t byte = pos/8;
-    int bit = pos&7;
+    off_t byte = pos/8; // 8位表示1个byte
+    int bit = pos&7; // 计算出在bitmap中的位置
     return (bitmap[byte] & (1<<bit)) != 0;
 }
 
-/* Set the bit at position 'pos' in a bitmap. */
+// 将位设置在bitmap中的“pos”位置。
 void bitmapSetBit(unsigned char *bitmap, int pos) {
+    // 在bitmap中按照位设置为1
     off_t byte = pos/8;
     int bit = pos&7;
     bitmap[byte] |= 1<<bit;
@@ -4246,7 +4286,7 @@ int clusterMastersHaveSlaves(void) {
     return slaves != 0;
 }
 
-/* Set the slot bit and return the old value. */
+/* 设置slots的位，并且返回旧值 */
 int clusterNodeSetSlotBit(clusterNode *n, int slot) {
     int old = bitmapTestBit(n->slots,slot);
     bitmapSetBit(n->slots,slot);
@@ -4284,10 +4324,7 @@ int clusterNodeGetSlotBit(clusterNode *n, int slot) {
     return bitmapTestBit(n->slots,slot);
 }
 
-/* Add the specified slot to the list of slots that node 'n' will
- * serve. Return C_OK if the operation ended with success.
- * If the slot is already assigned to another instance this is considered
- * an error and C_ERR is returned. */
+/*将制定的槽添加到节点"n"将要服务的插槽列表中. 操作成功返回OK，如果槽已经添加到其他节点中，或者节点已经存在返回错误*/
 int clusterAddSlot(clusterNode *n, int slot) {
     if (server.cluster->slots[slot]) return C_ERR;
     clusterNodeSetSlotBit(n,slot);
@@ -4842,6 +4879,7 @@ const char *getPreferredEndpoint(clusterNode *n) {
     return "unknown";
 }
 
+// 发送的不同的消息类型
 const char *clusterGetMessageTypeString(int type) {
     switch(type) {
     case CLUSTERMSG_TYPE_PING: return "ping";

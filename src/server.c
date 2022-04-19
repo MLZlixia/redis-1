@@ -1350,6 +1350,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
+    // 在sentiel模式，运行sentinel定时器，也是程序的入口
     if (server.sentinel_mode) sentinelTimer();
 
     /* Cleanup expired MIGRATE cached sockets. */
